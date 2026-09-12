@@ -19,9 +19,10 @@
   </head>
   <body>
     <main id="viewport"><div id="stage"></div></main>
-    <!-- M0 desktop shell mounts; both are removed with src/m0-selfcheck.ts in M1. -->
+    <div id="player-bar"></div>
+    <!-- Desktop shell bridge (v1.2) + M1 player mount; both retire with their modules in M2. -->
     <script type="module" src="/src/desktop-bridge.ts"></script>
-    <script type="module" src="/src/m0-selfcheck.ts"></script>
+    <script type="module" src="/src/m1-mount.ts"></script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

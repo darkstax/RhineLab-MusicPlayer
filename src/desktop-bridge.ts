@@ -1,9 +1,9 @@
 /**
  * 前端 ↔ 桌面壳（WebView2）的唯一入口。
  *
- * 协议唯一权威：docs/IPC-PROTOCOL.md v1。本文件**不翻译消息格式**：
+ * 协议唯一权威：docs/IPC-PROTOCOL.md v1.2。本文件**不翻译消息格式**：
  * 经 `window.chrome.webview.postMessage(string)` / `WebMessageReceived` 直传的 JSON
- * 与管道层完全一致（`v/t/id/seq/ts` + 顶层 `cmd`/`evt`/`data`）。
+ * 与管道层完全一致（`v/t/id/seq/ts/ep` + 顶层 `cmd`/`evt`/`data`）。
  *
  * 本模块对上游主工程零侵入：不 import 任何既有 src/* 模块；非桌面环境（普通浏览器、
  * Wallpaper Engine、PWA）一律安全降级为 no-op，不抛异常、不产生副作用。
@@ -20,13 +20,34 @@ export type HelloResult = {
   readonly proto: number;
   /** 壳侧通道状态：connecting / handshaking / ready / disconnected。 */
   readonly state: string;
-  /** 壳已连接的核心身份；未连接为 null。 */
+  /** 壳已连接的核心身份；未连接为 null（字段形状 = 协议 §4 壳聚合 hello 的 core，v1.1/v1.2）。 */
   readonly core: {
     readonly app?: string;
     readonly ver?: string;
     readonly caps: readonly string[];
+    /** 协议 v1.2：核心的会话世代（旧核心缺失时为 undefined）。 */
+    readonly ep?: number;
     readonly connected: boolean;
+    /** 前端与壳的协商交集（壳侧拼装的扩展字段，仅存在于壳↔前端链路）。 */
+    readonly negotiated_with_frontend?: readonly string[];
   } | null;
+  /** 本次桥接收到的核心事件会话世代（v1.2）；未收到任何带 ep 的帧时为 undefined。 */
+  readonly ep?: number;
+};
+
+/** `evt` 帧的 kind（协议 §6）；自定义 kind 保留字串兼容。 */
+export type EventKind = "state" | "position" | "transition" | "spectrum" | "error";
+
+/** 丢帧诊断快照（任务书 C2：审查 P1-C 落地；M6 诊断页复用）。 */
+export type BridgeDiagnostics = {
+  /** 当前会话世代（核心 ep）；未知为 null。 */
+  readonly ep: number | null;
+  /** 各 kind 通道的最近 seq 与累计丢帧数。 */
+  readonly channels: Readonly<Record<string, { seq: number; lost: number }>>;
+  /** 全部通道的累计丢帧总数（`ep` 变化不复位计数，但复位 seq 基线）。 */
+  readonly framesLost: number;
+  /** 会话世代切换（核心重启/重连）次数。 */
+  readonly epochSwitches: number;
 };
 
 /** 桥抛出的错误：`code` 取协议 §7 错误码表，或桥/壳侧的 disconnected / timeout / not_desktop。 */
@@ -38,6 +59,8 @@ export type Frame = Record<string, unknown> & {
   id?: string;
   evt?: string;
   seq?: number;
+  /** 协议 v1.2：核心会话世代（仅核心侧 evt 与核心 hello 应答携带）。 */
+  ep?: number;
   ts?: number;
 };
 
@@ -50,6 +73,8 @@ type WebViewHost = {
 declare global {
   interface Window {
     chrome?: { webview?: WebViewHost };
+    /** 桥的自测入口（任务书 C2：diagnostics 自测用，M6 诊断页复用）。仅桌面宿主下赋值。 */
+    __rhineBridge?: DesktopBridge;
   }
 }
 
@@ -74,7 +99,7 @@ function failure(code: string, message: string, retryable = false): BridgeError 
 const isFrame = (value: unknown): value is Frame =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-/** 与壳的连接状态机：握手、id 路由、事件分发、页面重载后的壳侧重放。 */
+/** 与壳的连接状态机：握手、id 路由、事件分发（kind 级订阅 + 丢帧检测）、页面重载后的壳侧重放。 */
 class DesktopBridge {
   private readonly listeners = new Set<{ type: string; fn: (frame: Frame) => void }>();
   private readonly pending = new Map<string, {
@@ -82,6 +107,13 @@ class DesktopBridge {
     reject: (error: BridgeError) => void;
     timer: ReturnType<typeof setTimeout>;
   }>();
+  /** 协议 v1.2 接收侧丢帧检测（审查 P1-C）：按 kind 通道记 (ep, last_seq)。
+   * 规则（§6）：ep 变化 → 复位基线不记丢帧；ep 相同且 seq > last+1 → 计入 framesLost；
+   * seq ≤ last 视为乱序/重复，丢弃不计数。 */
+  private readonly channels = new Map<string, { ep: number | null; seq: number; lost: number }>();
+  private ep: number | null = null;
+  private epochSwitches = 0;
+  private framesLost = 0;
   private sequence = 0;
   private attached = false;
   private hello?: HelloResult;
@@ -96,6 +128,8 @@ class DesktopBridge {
     if (!this.desktop) return;
     host()!.addEventListener("message", (event) => this.receive(event.data));
     this.attached = true;
+    // 自测/诊断入口（验收 4 的 headless 读取路径；M6 诊断页复用）。
+    if (typeof window !== "undefined") window.__rhineBridge = this;
   }
 
   /** 与壳握手（协议 §4）。非桌面环境返回降级结果，永不 reject。 */
@@ -160,26 +194,30 @@ class DesktopBridge {
     });
   }
 
-  /** 订阅帧。`type` 为 `evt`（全部事件）/ `state`（evt 且 evt==="state"）/ `hello`。返回退订函数。 */
-  on(type: "evt" | "state" | "hello", fn: (frame: Frame) => void): () => void {
+  /**
+   * 订阅帧。`type` 取：`evt`（全部事件，旧全量订阅保留兼容）/ 具体 kind（`state`、`position`、
+   * `transition`、`spectrum`、`error`，= evt 且 evt 同名的 kind 级订阅，任务书 C2）/ `hello`。
+   * 返回退订函数。
+   */
+  on(type: "evt" | "hello" | EventKind | (string & {}), fn: (frame: Frame) => void): () => void {
     const entry = { type, fn };
     this.listeners.add(entry);
     return () => this.listeners.delete(entry);
   }
 
-  /** dev-only：壳本地自答 ping + 核心 echo 各测一次，返回微秒往返（M0 演示链路用）。 */
-  async ping(): Promise<{ shell_rtt_us: number; core_rtt_us?: number }> {
-    if (!this.desktop) throw failure("not_desktop", "ping requires the desktop shell");
-    const shell = await this.timed("ping");
-    let core: number | undefined;
-    try {
-      core = await this.timed("echo", { data: "ping" });
-    } catch {
-      core = undefined;
-    }
-    return core === undefined ? { shell_rtt_us: shell } : { shell_rtt_us: shell, core_rtt_us: core };
+  /** 丢帧检测快照（验收 4 取证；M6 诊断页复用）。 */
+  diagnostics(): BridgeDiagnostics {
+    const channels: Record<string, { seq: number; lost: number }> = {};
+    for (const [kind, channel] of this.channels) channels[kind] = { seq: channel.seq, lost: channel.lost };
+    return {
+      ep: this.ep,
+      channels,
+      framesLost: this.framesLost,
+      epochSwitches: this.epochSwitches,
+    };
   }
 
+  /** dev-only 的 M0 ping 演示链路已随自检面板退役（壳侧同步删除）；保留本方法签名供未来诊断页用。 */
   private async timed(cmd: string, args?: object): Promise<number> {
     const start = performance.now();
     await this.call(cmd, args, 4000);
@@ -218,34 +256,91 @@ class DesktopBridge {
     entry.resolve(frame);
   }
 
+  /** 协议 v1.2：每帧 evt 的 (ep, seq) 按 kind 通道做丢帧检测（规则见 §6）。 */
+  private trackSequence(frame: Frame) {
+    const kind = typeof frame.evt === "string" ? frame.evt : "(none)";
+    const seq = typeof frame.seq === "number" && Number.isFinite(frame.seq) ? frame.seq : null;
+    const ep = typeof frame.ep === "number" && Number.isFinite(frame.ep) ? frame.ep : null;
+    if (seq === null) return;
+
+    if (ep !== null && this.ep !== ep) {
+      // 会话世代切换（核心重启/新会话）：复位全局基线，跨重连不误报丢帧。
+      if (this.ep !== null) this.epochSwitches += 1;
+      this.ep = ep;
+      this.channels.clear();
+    }
+
+    let channel = this.channels.get(kind);
+    if (!channel) {
+      channel = { ep, seq: 0, lost: 0 };
+      this.channels.set(kind, channel);
+    }
+
+    if (ep !== channel.ep) {
+      // 本通道首次在新世代下见帧：只重置基线。
+      channel.ep = ep;
+      channel.seq = seq;
+      return;
+    }
+
+    if (channel.seq === 0) {
+      channel.seq = seq;
+      return;
+    }
+
+    if (seq > channel.seq + 1) {
+      channel.lost += seq - channel.seq - 1;
+      this.framesLost += seq - channel.seq - 1;
+    }
+
+    if (seq > channel.seq) channel.seq = seq;
+    // seq ≤ last：乱序/重复，丢弃不计数。
+  }
+
   private acceptHello(frame: Frame) {
     const raw = isFrame(frame.core) ? frame.core : undefined;
     const core = raw === undefined ? null : {
       app: typeof raw.app === "string" ? raw.app : undefined,
       ver: typeof raw.ver === "string" ? raw.ver : undefined,
       caps: Array.isArray(raw.caps) ? raw.caps.map(String) : [],
+      ep: typeof raw.ep === "number" ? raw.ep : undefined,
       connected: raw.connected === true,
+      negotiated_with_frontend: Array.isArray(raw.negotiated_with_frontend)
+        ? raw.negotiated_with_frontend.map(String)
+        : undefined,
     };
     this.last.hello = frame;
-    this.hello = {
+    // 协议 v1.2：壳聚合 hello 的 core.ep 变化 = 核心新会话（重连/重启），复位丢帧基线。
+    if (core?.ep !== undefined && this.ep !== core.ep) {
+      if (this.ep !== null) this.epochSwitches += 1;
+      this.ep = core.ep;
+      this.channels.clear();
+    }
+    const result: HelloResult = {
       desktop: true,
       ok: true,
       caps: Array.isArray(frame.caps) ? frame.caps.map(String) : [],
       proto: typeof frame.proto === "number" ? frame.proto : PROTO,
       state: typeof frame.state === "string" ? frame.state : "unknown",
       core,
+      ep: this.ep ?? undefined,
     };
+    this.hello = result;
     const waiters = this.helloWaiters;
     this.helloWaiters = [];
-    for (const waiter of waiters) waiter(this.hello);
+    for (const waiter of waiters) waiter(result);
     this.emit(frame);
   }
 
   private emit(frame: Frame) {
+    if (frame.t === "evt") this.trackSequence(frame);
     if (frame.t === "evt" && frame.evt === "state") this.last.state = frame;
     for (const listener of [...this.listeners]) {
-      const match = listener.type === "evt" || listener.type === frame.t ||
-        (listener.type === "state" && frame.t === "evt" && frame.evt === "state");
+      const match = listener.type === "evt"
+        ? frame.t === "evt"
+        : listener.type === frame.t ||
+          // kind 级订阅：`state`/`position`/… 命中 evt 帧的 evt 字段（旧 "state" 语义并入此规则）。
+          (frame.t === "evt" && frame.evt === listener.type);
       if (!match) continue;
       try {
         listener.fn(frame);

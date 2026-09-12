@@ -1,0 +1,201 @@
+/**
+ * 底部播放条样式（任务书 M1 范围 C3/C4）：只用 theme-ui.ts 注入的 --theme-* 变量，
+ * 亮暗配色自动跟随；无新依赖、不改上游任何样式文件。
+ */
+
+#player-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 90;
+  max-width: min(980px, calc(100vw - 32px));
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--theme-ink, #080a08);
+}
+
+#player-bar .pb-main {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 14px;
+  background: rgba(var(--theme-paper-rgb, 234, 229, 225), 0.82);
+  border: 1px solid var(--theme-line, #aaa59a);
+  border-radius: 10px;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+#player-bar .pb-identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 220px;
+}
+
+#player-bar .pb-state {
+  font-size: 10px;
+  color: var(--theme-muted, #77756d);
+  border: 1px solid var(--theme-line, #aaa59a);
+  border-radius: 4px;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+
+#player-bar .pb-state[data-state="playing"] {
+  color: var(--theme-accent, #9b7247);
+  border-color: var(--theme-accent, #9b7247);
+}
+
+#player-bar .pb-title {
+  min-width: 8ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--theme-ink, #080a08);
+}
+
+#player-bar .pb-badges {
+  display: inline-flex;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+#player-bar .fb-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px dashed var(--theme-line, #aaa59a);
+  color: var(--theme-muted, #77756d);
+}
+
+#player-bar .fb-badge.fb-unknown {
+  border-style: solid;
+  color: var(--theme-accent, #9b7247);
+}
+
+#player-bar .pb-controls {
+  display: flex;
+  gap: 6px;
+}
+
+#player-bar .pb-btn {
+  min-width: 34px;
+  height: 30px;
+  border: 1px solid var(--theme-line, #aaa59a);
+  border-radius: 6px;
+  color: var(--theme-ink, #080a08);
+  background: var(--theme-field, #e7e3d9);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0 8px;
+}
+
+#player-bar .pb-btn:hover {
+  border-color: var(--theme-accent, #9b7247);
+  color: var(--theme-accent, #9b7247);
+}
+
+#player-bar .pb-progress {
+  flex: 2 1 240px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  touch-action: none;
+}
+
+#player-bar .pb-rail {
+  position: relative;
+  width: 100%;
+  height: 3px;
+  background: var(--theme-line, #aaa59a);
+  border-radius: 2px;
+}
+
+#player-bar .pb-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0%;
+  background: var(--theme-ink, #080a08);
+  border-radius: 2px;
+}
+
+#player-bar .pb-knob {
+  position: absolute;
+  top: 50%;
+  left: 0%;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--theme-accent, #9b7247);
+  transform: translate(-50%, -50%);
+}
+
+#player-bar .pb-times {
+  display: flex;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+  color: var(--theme-muted, #77756d);
+  white-space: nowrap;
+}
+
+#player-bar .pb-volume {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--theme-muted, #77756d);
+}
+
+#player-bar .pb-vol-icon {
+  font-size: 10px;
+}
+
+#player-bar .pb-volume input {
+  width: 84px;
+  accent-color: var(--theme-accent, #9b7247);
+}
+
+#player-bar .pb-load {
+  display: flex;
+  gap: 6px;
+}
+
+#player-bar .pb-id {
+  width: 118px;
+  height: 30px;
+  border: 1px solid var(--theme-line, #aaa59a);
+  border-radius: 6px;
+  background: var(--theme-field, #e7e3d9);
+  color: var(--theme-ink, #080a08);
+  padding: 0 8px;
+  font: inherit;
+}
+
+#player-bar .pb-id::placeholder {
+  color: var(--theme-muted, #77756d);
+}
+
+#player-bar .pb-toast {
+  margin-top: 6px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--theme-accent, #9b7247);
+  background: rgba(var(--theme-paper-rgb, 234, 229, 225), 0.82);
+  border: 1px solid var(--theme-line, #aaa59a);
+  border-radius: 6px;
+  padding: 4px 10px;
+}
+
+@media (max-width: 720px) {
+  #player-bar .pb-main {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  #player-bar .pb-progress {
+    order: 10;
+    flex-basis: 100%;
+  }
+}
