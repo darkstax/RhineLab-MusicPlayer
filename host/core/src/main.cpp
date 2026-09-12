@@ -623,26 +623,36 @@ int main(int argc, char** argv) {
     HANDLE currentInstance = INVALID_HANDLE_VALUE;
 
     for (;;) {
-        // 预创建下一实例（标准单服务器管道模式：断开当前前下一实例已在听）。
-        HANDLE next = CreateNamedPipeW(pipeWide.c_str(),
-                                       PIPE_ACCESS_DUPLEX | FILE_FLAG_WRITE_THROUGH,
-                                       PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT |
-                                           PIPE_REJECT_REMOTE_CLIENTS,
-                                       1, 64 * 1024, 64 * 1024, 0, sd ? &sa : nullptr);
-        if (next == INVALID_HANDLE_VALUE) {
-            const DWORD err = GetLastError();
-            if (connections == 0) {
-                Log("error", "cannot create pipe (err=" + std::to_string(err) +
-                                 ") — another core instance owns it? exit=3");
-                exitCode = 3;
-                break;
-            }
-            Log("error", "cannot create next pipe instance (err=" + std::to_string(err) + ")");
-            exitCode = 5;
-            break;
-        }
+        // 审查 P0-2：maxNumberOfServerInstances=1 —— 必须先断开+关闭上一实例再建新实例。
+        // 原“预创建下一实例”标准模式在 max=1 下必吃 231（ALL_PIPE_INSTANCES_RESERVED），
+        // 任何异常断线后进程直接 exit=5 死亡，破坏协议 §4/§9 的重连语义（桩同场景是退避续听）。
         if (currentInstance != INVALID_HANDLE_VALUE) {
+            DisconnectNamedPipe(currentInstance);
             CloseHandle(currentInstance);
+            currentInstance = INVALID_HANDLE_VALUE;
+        }
+        HANDLE next = INVALID_HANDLE_VALUE;
+        for (int attempt = 0; attempt < 20 && next == INVALID_HANDLE_VALUE; ++attempt) {
+            next = CreateNamedPipeW(pipeWide.c_str(),
+                                    PIPE_ACCESS_DUPLEX | FILE_FLAG_WRITE_THROUGH,
+                                    PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT |
+                                        PIPE_REJECT_REMOTE_CLIENTS,
+                                    1, 64 * 1024, 64 * 1024, 0, sd ? &sa : nullptr);
+            if (next == INVALID_HANDLE_VALUE) {
+                const DWORD err = GetLastError();
+                if (connections == 0) {
+                    Log("error", "cannot create pipe (err=" + std::to_string(err) +
+                                     ") — another core instance owns it? exit=3");
+                    exitCode = 3;
+                    break;
+                }
+                Log("warn", "create pipe retry err=" + std::to_string(err));
+                Sleep(50);
+            }
+        }
+        if (next == INVALID_HANDLE_VALUE) {
+            if (exitCode == 0) exitCode = 5;
+            break;
         }
         currentInstance = next;
         if (connections == 0) Log("info", "listening pipe=" + pipe);

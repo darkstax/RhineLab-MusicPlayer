@@ -369,6 +369,10 @@ bool AudioBackend::RestartStream(std::uint64_t startFrames, std::int64_t* elapse
         // 不可 seek 的流：回 EOF 位置（= 立刻曲终自动 stopped 语义），不算命令失败。
         eofReached_.store(true, std::memory_order_relaxed);
         startFrames = facts_.lengthFrames;
+    } else {
+        // 审查 P0-1：seek 成功必须清 EOF 标志——否则曲终后同曲重播/toggle 永久锁死
+        //（解码线程只检 eofReached_ 不响应 feedPaused_，ring 永空→秒收敛 stopped）。
+        eofReached_.store(false, std::memory_order_relaxed);  // FIX-P0-1
     }
     primed_.store(false, std::memory_order_relaxed);
     anchorFrames_.store(startFrames, std::memory_order_relaxed);
@@ -427,6 +431,8 @@ void AudioBackend::SeekFrozen(std::uint64_t frames) {
     if (ma_decoder_seek_to_pcm_frame(&decoder_, frames) != MA_SUCCESS) {
         eofReached_.store(true, std::memory_order_relaxed);
         frames = facts_.lengthFrames;
+    } else {
+        eofReached_.store(false, std::memory_order_relaxed);  // FIX-P0-1（SeekFrozen 同款）
     }
     Reanchor(frames);
 }
@@ -484,6 +490,13 @@ void AudioBackend::DecoderLoop() {
         ma_uint64 got = 0;
         const ma_result rc =
             ma_decoder_read_pcm_frames(&decoder_, chunkS32_.data(), kChunkFrames, &got);
+        // 审查 P1-1：check-then-act 收口——read 期间若 QuiesceFeed 已置暂停（它看到
+        // feeding_==false 的窗口里我们才翻 true），丢弃本 chunk 不 push：随后调用方会
+        // reset ring 并 seek 重定位解码器，丢弃无害；否则旧位置样本会混入新流（错位爆音）。
+        if (feedPaused_.load(std::memory_order_acquire)) {
+            feeding_.store(false, std::memory_order_release);
+            continue;
+        }
         if (got > 0) {
             ring_.push(chunkS32_.data(), static_cast<std::size_t>(got));
             primed_.store(true, std::memory_order_relaxed);
@@ -517,11 +530,14 @@ proto::Json AudioBackend::Negotiated() const {
     // f32→s32 转换段必须如实记 float-decode 因子，不得谎报直通）。
     const bool sourceFloat = hasTrack &&
         (facts_.sourceFormat == "f32" || facts_.sourceFormat == "f64");
+    // 审查 P1-2：重采样/通道适配走 ma_data_converter，其内部以 f32 中转（mid 格式），
+    // s24-in-s32 整型位在此丢低位——decoder 节点不得再报直通，且需明列 float-convert 因子。
+    const bool floatConvert = resampled || channelAdapt;
     chain.push_back({{"node", "decoder"},
                      {"detail",
                       std::string(hasTrack ? facts_.sourceEncoding : "none") + " " +
                           std::string(hasTrack ? facts_.sourceFormat : "-") + "->s32"},
-                     {"passthrough", hasTrack && facts_.outInteger && !sourceFloat}});
+                     {"passthrough", hasTrack && facts_.outInteger && !sourceFloat && !floatConvert}});
     chain.push_back({{"node", "resample"}, {"passthrough", !resampled}});
     chain.push_back({{"node", "volume"}, {"mode", volumeMode_}, {"passthrough", volumePassthrough}});
 
@@ -537,6 +553,7 @@ proto::Json AudioBackend::Negotiated() const {
     if (sourceFloat) factors.push_back("float-decode");  // 任务书约束 3：解码 float 化注明
     if (resampled) factors.push_back("resample");
     if (channelAdapt) factors.push_back("channel-adapt");
+    if (floatConvert) factors.push_back("float-convert");  // 审查 P1-2：converter 内部 f32 中转丢位
     if (!volumePassthrough) {
         factors.push_back(hwPath ? std::string("hardware-volume") : std::string("float-volume"));
     }

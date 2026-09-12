@@ -29,7 +29,7 @@
 | 4 | play 起始位置钳制 | `min(start, duration)` | `start > duration && duration != 0 → start = duration` | 一致（duration=0 见 §2.3） |
 | 5 | play 事件序 | `[state, position]` | 同 | 一致 |
 | 6 | play ack | `{stream_token:"fake-<n>"}` | `{stream_token:"core-<n>"}`（进程内单调同款） | 一致（前缀=来源标识） |
-| 7 | 重复 play 同 track | 从头（重锚 + Playing） | 不重开解码器，`RestartStream(0)` 从头 | 一致 |
+| 7 | 重复 play 同 track | 从头（重锚 + Playing） | 不重开解码器，`RestartStream(0)` 从头 | **审查 P0-1 修正后成立**：修复前 EOF 后同曲重播永久锁死（seek 成功不清 eofReached_，解码线程不再供喂）；audio.cpp RestartStream/SeekFrozen 成功分支已补 `eofReached_=false`，真机 repro.ps1 实测重播恢复推进（pos 40→…→5520）+toggle 重播 OK |
 | 8 | position 外推（playing） | 锚点 + (now − epoch)，`min(…, duration)` | 设备时钟：锚点帧 + (played − anchorPlayed)，钳 [0,length] | 一致（时钟源换权威，§4） |
 | 9 | position（非 playing） | 锚点冻结值 | `lastPositionMs_` 冻结值 | 一致 |
 | 10 | pause 仅 playing 生效 | 冻结=外推落锚；否则幂等回 state | 先 `PositionMs()` 读点再 `FreezeStream()`；否则幂等 | 一致 |
@@ -57,9 +57,9 @@
 | 32 | echo | 桩实现（M0 遗留） | 不实现（caps 未声明，按 §5 回 not_implemented） | 有意差异（真核心无回声测试面） |
 | 33 | hello 成功 → ep 自增、evt 携带 ep | 进程内计数 | 同（进程级 atomic，跨连接延续） | 一致 |
 | 34 | hello 后补发最新 state | 是（§9） | 同 | 一致 |
-| 35 | 3s 握手超时 → 关连接、进程存活待重连 | CancellationToken | `ReadLineTimeout(3000)`（接管修正，§3-B1） | 一致 |
+| 35 | 3s 握手超时 → 关连接、进程存活待重连 | CancellationToken | `ReadLineTimeout(3000)`（接管修正，§3-B1） | **审查 P0-2 修正后成立**：修复前超时后续听新实例吃 231 → exit=5 死亡；main.cpp 改为先 Disconnect+Close 旧实例再建（231 重试环），handshake.ps1 实测超时后 conn=2 续连 OK |
 | 36 | bye → 有序退出 exit 0，不回帧 | 同 | 接管修正为同款（前任回 `bye{core-ack}` 已删，§3-B2） | 一致 |
-| 37 | EOF（壳断线）→ 会话结束继续 listen | 同 | 同 | 一致 |
+| 37 | EOF（壳断线）→ 会话结束继续 listen | 同 | 同 | **审查 P0-2 修正后成立**：同 #35（预创建下一实例在 max=1 下必吃 231）；hardcut.ps1 实测硬断线→conn2 重连 ep=2 递增→bye exit 0 |
 | 38 | 非法帧（非 JSON / 非对象 / cmd 缺 id） | bad_request 不崩溃 | 同 | 一致 |
 | 39 | 状态机跨连接保留 | 进程级单例 | 接管修正为进程级单例（前任在 Session 内 new，§3-B3） | 一致 |
 | 40 | 第二实例 | 管道占用 exit 3 | 同（CreateNamedPipe 失败首连 → 3） | 一致 |
@@ -221,3 +221,23 @@
 - 同一错误无 3 连败记录；无遗留 workaround。
 - 最终构建：`errors=0 warnings(project)=0`；增量编译只编业务 TU
   （miniaudio_impl 单独成 TU，全量约 3 分钟，增量 <20 秒）。
+
+## 8. 审查修复记录（reviewer-qwen 报告后，主进程执行，2026-09-13）
+
+审查结论"修后复审"，四项全部落地并真机复验：
+
+- **P0-1 EOF 后同曲重播锁死**（audio.cpp）：`RestartStream`/`SeekFrozen` seek 成功分支补
+  `eofReached_.store(false)`。复验：repro.ps1（曲终→同曲 re-play→toggle）修复前"秒回 stopped
+  永久锁死"，修复后重播恢复推进（pos=40→5520）且 pause 冻结正常，exit=0。
+- **P0-2 断线后进程死亡**（main.cpp）：预创建下一实例模式在 max=1 下必吃 ERROR 231 → 改为
+  先 `DisconnectNamedPipe+CloseHandle` 再建（含 231 重试环 20×50ms，首建失败仍 exit=3 保互斥）。
+  复验：handshake.ps1 超时后 conn=2 续连；hardcut.ps1 硬断线→重连 ep=2→bye exit=0。
+- **P1-1 seek 清 ring 竞态**（audio.cpp DecoderLoop）：read 后 push 前复查 `feedPaused_`，
+  命中即丢 chunk continue（调用方随后 reset+seek，丢弃无害），封死 Quiesce 误判静默窗口。
+- **P1-2 重采样路 chain 失真**（audio.cpp Negotiated）：`resampled||channelAdapt` 时 decoder 节点
+  `passthrough:false` + 新增 `float-convert` 因子（ma_data_converter 内部 f32 中转丢位，M3 信号
+  路径图上线前必须诚实）。
+- **P1-3 对照表 #7/#35/#37 改实**（本文 §1）+ 本节的"接管期漏修"补记。
+- 构建复验：m2-build.ps1 errors=0 warnings(project)=0；三脚本真机全绿。
+- reviewer 的 P2 表（trace elapsed 未消费、非常规 WAV probe 保守、hardware 增益措辞、LICENSE 年份、
+  superseded 简化等）按信任边界与 M2b/M4 域全部备案不修。
