@@ -28,6 +28,11 @@ public sealed class ShellOptions
     /// <summary>退出时同时结束本次由壳拉起的核心进程（仅 <c>--spawn-core</c> 模式下有意义）。</summary>
     public bool SpawnedCoreOwned { get; init; }
 
+    /// <summary>任务书 M2 约束 8：<c>--core-exe &lt;path&gt;</c> 改 <c>--spawn-core</c> 拉起的核心
+    /// 可执行文件（如 dist-host\core\RhineCore.exe 真音频核心）；缺省仍为随包桩
+    /// <c>core\RhineCoreStub.exe</c>，壳其余行为零改动。</summary>
+    public string? CoreExe { get; init; }
+
     /// <summary>任务书 B4：<c>--dev</c> 加载 vite dev 端口代替 app.rhine.local，窗口标题加 [dev]，
     /// 供 UI 迭代免重编壳；无参数时行为不变。</summary>
     public bool Dev { get; init; }
@@ -37,7 +42,7 @@ public sealed class ShellOptions
     public int RemoteDebugPort { get; init; }
 
     public string Describe() =>
-        $"dist=\"{DistDirectory}\" pipe=\"{PipeName}\" coreDisabled={CoreDisabled} devtools={OpenDevTools} dev={Dev} cdp={RemoteDebugPort}";
+        $"dist=\"{DistDirectory}\" pipe=\"{PipeName}\" coreDisabled={CoreDisabled} devtools={OpenDevTools} dev={Dev} cdp={RemoteDebugPort} coreExe={(CoreExe ?? "(stub)")}";
 
     public static ShellOptions FromCommandLine(string[] args)
     {
@@ -53,6 +58,7 @@ public sealed class ShellOptions
             CoreDisabled = args.Contains("--no-core"),
             OpenDevTools = args.Contains("--devtools"),
             SpawnedCoreOwned = args.Contains("--spawn-core"),
+            CoreExe = Value(args, "--core-exe"),
             Dev = args.Contains("--dev"),
             RemoteDebugPort = int.TryParse(Value(args, "--remote-debug-port"), out var port) && port is > 0 and < 65536
                 ? port

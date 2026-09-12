@@ -134,13 +134,17 @@ public partial class MainWindow : Window
     /// <summary>
     /// <c>--spawn-core</c>：由壳拉起随包的核心桩（<c>dist-host\core\RhineCoreStub.exe</c>），
     /// 关窗时一并结束。M1 起这是正式的核心生命周期模型。
+    /// M2 约束 8：<c>--core-exe &lt;path&gt;</c> 换成真音频核心（RhineCore.exe）等同一路径，
+    /// 日志区分 core 类型；壳其余行为零改动。
     /// </summary>
     private void StartOwnedCore()
     {
-        var exe = Path.Combine(AppContext.BaseDirectory, "core", "RhineCoreStub.exe");
+        var exe = _options.CoreExe is { Length: > 0 } coreExe
+            ? Path.GetFullPath(coreExe)
+            : Path.Combine(AppContext.BaseDirectory, "core", "RhineCoreStub.exe");
         if (!File.Exists(exe))
         {
-            Log.Error($"--spawn-core: stub not found at {exe}");
+            Log.Error($"--spawn-core: core exe not found at {exe}");
             return;
         }
 
@@ -152,7 +156,7 @@ public partial class MainWindow : Window
                 UseShellExecute = false,
                 CreateNoWindow = true,
             });
-            Log.Info($"spawned core stub pid={_ownedCore?.Id}");
+            Log.Info($"spawned core pid={_ownedCore?.Id} exe={Path.GetFileName(exe)}");
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException)
         {
@@ -177,7 +181,7 @@ public partial class MainWindow : Window
             try
             {
                 core.Kill(entireProcessTree: true);
-                Log.Info("owned core stub stopped");
+                Log.Info("owned core stopped");
             }
             catch (InvalidOperationException)
             {
