@@ -10,8 +10,8 @@ using RhineShell.Hosting;
 namespace RhineShell;
 
 /// <summary>
-/// M0 宿主窗口：WebView2 载入 Vite 构建产物（虚拟主机映射，免起 HTTP 端口），
-/// 并把页面消息接到 <see cref="Bridge"/>。
+/// 宿主窗口：WebView2 载入 Vite 构建产物（虚拟主机映射，免起 HTTP 端口），
+/// 并把页面消息接到 <see cref="Bridge"/>。<c>--dev</c> 时改加载本地 vite 服务（任务书 B4）。
 /// </summary>
 public partial class MainWindow : Window
 {
@@ -29,19 +29,30 @@ public partial class MainWindow : Window
     {
         _options = options;
         InitializeComponent();
+        if (options.Dev) Title = "Rhine Lab · [dev]";
         HostRoot.Children.Add(_view);
         HostRoot.Children.Add(_fallback);
         _fallback.Visibility = Visibility.Collapsed;
+
+        // 任务书 B2：启动时应用持久化的 keep_awake（默认关）。
+        ApplyKeepAwakeFromConfig();
 
         Loaded += OnLoaded;
         Closed += OnClosed;
     }
 
+    /// <summary>从壳 config 读 desktop.keep_awake 并置位（读不到一律视为关，不报错）。</summary>
+    private static void ApplyKeepAwakeFromConfig()
+    {
+        var enabled = ConfigStore.Get("desktop.keep_awake")?.GetValueKind()
+            is System.Text.Json.JsonValueKind.True;
+        if (enabled) KeepAwake.Apply(true);
+        else Log.Info("keep_awake config off (default)");
+    }
+
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
         ConfigureFallback();
-        // 无人值守验收定时器无条件调度：即使页面导航失败也能写 dump（面板缺失文案）并退出，不挂死。
-        if (_options.SelfCheckDump is not null) ScheduleSelfCheckDump();
 
         // 核心通道先起，这样页面一加载就已有 hello/state 可重放（协议 §9）。
         if (!_options.CoreDisabled)
@@ -56,7 +67,7 @@ public partial class MainWindow : Window
         {
             var userData = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "RhineMusic", "m0", "webview2");
+                "RhineMusic", "webview2");
             Directory.CreateDirectory(userData);
 
             var environment = await CoreWebView2Environment.CreateAsync(userDataFolder: userData);
@@ -91,8 +102,8 @@ public partial class MainWindow : Window
                 RefreshStatus();
             };
 
-            if (!Directory.Exists(_options.DistDirectory) ||
-                !File.Exists(Path.Combine(_options.DistDirectory, "index.html")))
+            if (!_options.Dev && (!Directory.Exists(_options.DistDirectory) ||
+                                   !File.Exists(Path.Combine(_options.DistDirectory, "index.html"))))
             {
                 ShowMissingDist();
                 return;
@@ -100,7 +111,8 @@ public partial class MainWindow : Window
 
             _view.CoreWebView2.SetVirtualHostNameToFolderMapping(
                 VirtualHost, _options.DistDirectory, CoreWebView2HostResourceAccessKind.DenyCors);
-            _view.CoreWebView2.Navigate($"https://{VirtualHost}/index.html");
+            // 任务书 B4：--dev 直连 vite 服务（HMR 改 UI 不重编壳）；无参数行为不变。
+            _view.CoreWebView2.Navigate(_options.Dev ? ShellOptions.DevUrl : $"https://{VirtualHost}/index.html");
         }
         catch (Exception ex) when (ex is WebView2RuntimeNotFoundException or IOException or UnauthorizedAccessException)
         {
@@ -109,8 +121,8 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// <c>--spawn-core</c>：由壳拉起随包的 M0 核心桩（<c>dist-host\core\RhineCoreStub.exe</c>），
-    /// 关窗时一并结束。M1 起这是正式的核心生命周期模型，M0 仅用于本机自测。
+    /// <c>--spawn-core</c>：由壳拉起随包的核心桩（<c>dist-host\core\RhineCoreStub.exe</c>），
+    /// 关窗时一并结束。M1 起这是正式的核心生命周期模型。
     /// </summary>
     private void StartOwnedCore()
     {
@@ -137,53 +149,6 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>M0 验证辅助（dev-only，M1 删除）：页面稳定后定时把 #m0-selfcheck 面板文本落盘并退出。
-    /// 面板是 `white-space:pre-wrap` 的纯文本节点，innerText 与 page_to_markdown 看到的完全一致。
-    /// </summary>
-    private void ScheduleSelfCheckDump()
-    {
-        var delay = TimeSpan.FromSeconds(_options.SelfCheckAfterSeconds);
-        var timer = new DispatcherTimer(DispatcherPriority.Background) { Interval = delay };
-        timer.Tick += async (_, _) =>
-        {
-            timer.Stop();
-            try
-            {
-                if (_view.CoreWebView2 is null)
-                {
-                    throw new InvalidOperationException("WebView2 not initialized yet");
-                }
-
-                var script = "(document.getElementById('m0-selfcheck')||{}).innerText||'<panel missing>';";
-                var text = await _view.CoreWebView2.ExecuteScriptAsync(script).ConfigureAwait(true);
-                // ExecuteScriptAsync 返回 JSON 字符串（带引号与转义）。
-                var value = System.Text.Json.JsonSerializer.Deserialize<string>(text) ?? string.Empty;
-                var target = Path.GetFullPath(_options.SelfCheckDump!);
-                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                File.WriteAllText(target, value, new System.Text.UTF8Encoding(false));
-                Log.Info($"selfcheck dump written to {target} ({value.Length} chars)");
-            }
-            catch (Exception ex) when (ex is System.Text.Json.JsonException or IOException or InvalidOperationException)
-            {
-                Log.Error($"selfcheck dump failed: {ex.Message}");
-                try
-                {
-                    File.WriteAllText(Path.GetFullPath(_options.SelfCheckDump!), "<dump failed: " + ex.Message + ">",
-                        new System.Text.UTF8Encoding(false));
-                }
-                catch (IOException)
-                {
-                    // 写入目标不可用时仅留日志
-                }
-            }
-            finally
-            {
-                Close();
-            }
-        };
-        timer.Start();
-    }
-
     private async void OnClosed(object? sender, EventArgs e)
     {
         _bridge?.Detach();
@@ -192,6 +157,9 @@ public partial class MainWindow : Window
             await _channel.ShutdownAsync("shell-window-closed");
             await _channel.DisposeAsync();
         }
+
+        // 退出前释放本进程的电源请求（任务书 B2：不残留系统状态）。
+        if (KeepAwake.Active) KeepAwake.Apply(false);
 
         if (_ownedCore is { HasExited: false } core)
         {
@@ -225,9 +193,9 @@ public partial class MainWindow : Window
         _view.Visibility = Visibility.Collapsed;
         _fallback.Visibility = Visibility.Visible;
         _fallback.Text =
-            "RhineShell M0 · 找不到前端构建产物\n\n" +
+            "RhineShell · 找不到前端构建产物\n\n" +
             $"期望目录: {_options.DistDirectory}\n\n" +
-            "请先运行: pwsh scripts/m0-build.ps1\n" +
+            "请先运行: pwsh scripts/m-build.ps1\n" +
             "或在启动时指定: RhineShell.exe --dist <dist 目录路径>";
         RefreshStatus();
     }
@@ -237,7 +205,7 @@ public partial class MainWindow : Window
         Log.Error($"{title}: {detail}");
         _view.Visibility = Visibility.Collapsed;
         _fallback.Visibility = Visibility.Visible;
-        _fallback.Text = $"RhineShell M0 · {title}\n\n{detail}";
+        _fallback.Text = $"RhineShell · {title}\n\n{detail}";
     }
 
     private void RefreshStatus()

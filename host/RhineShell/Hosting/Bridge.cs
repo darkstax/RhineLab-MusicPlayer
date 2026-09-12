@@ -1,3 +1,5 @@
+using System.IO;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Windows.Threading;
 using Microsoft.Web.WebView2.Wpf;
@@ -9,20 +11,17 @@ namespace RhineShell.Hosting;
 /// 前端 ↔ 壳 的转发网关（<c>docs/IPC-PROTOCOL.md</c> §1：壳是前端的唯一特权网关）。
 ///
 /// <list type="bullet">
-/// <item>WebView2 <c>WebMessageReceived</c> → 解析 → 壳自身处理的 <c>hello</c>/<c>ping</c> / 转发 <c>cmd</c> 给核心；</item>
+/// <item>WebView2 <c>WebMessageReceived</c> → 解析 → 壳自身处理的 <c>hello</c>/<c>config.*</c> / 转发 <c>cmd</c> 给核心；</item>
 /// <item>核心 <c>evt</c>/<c>hello</c> → <c>PostWebMessageAsJson</c> 推给前端；</item>
 /// <item>页面（重新）加载后重放 <c>hello</c> + 最新 <c>evt{state}</c> 快照（§9）；</item>
 /// <item>壳侧生成的错误帧与核心来的 <c>ack</c>/<c>err</c> 同形，前端只写一条处理路径。</item>
 /// </list>
 ///
-/// M0 的 <c>cmd=ping</c> 本地自答是 **dev-only** 演示链路（未进协议表），
-/// M1 接入真实核心时随 <see cref="DevOnlyPing"/> 一并删除。
+/// M1：壳自答 <c>config.get/set</c>（§5，落 <see cref="ConfigStore"/>，不转发核心）；
+/// M0 的 dev-only <c>ping</c> 自答已随验收链退役。
 /// </summary>
 public sealed class Bridge
 {
-    /// <summary>搜索这个常量即可定位所有 dev-only ping 代码。</summary>
-    public const string DevOnlyPing = "dev-only:m0";
-
     private readonly ShellChannel _channel;
     private readonly Dispatcher _dispatcher = Dispatcher.CurrentDispatcher;
     private readonly Action<JsonObject> _post;
@@ -105,6 +104,8 @@ public sealed class Bridge
                 ["app"] = _channel.RemoteHello["app"]?.GetValue<string>(),
                 ["ver"] = _channel.RemoteHello["ver"]?.GetValue<string>(),
                 ["caps"] = _channel.RemoteHello["caps"]?.DeepClone(),
+                // 协议 §4 v1.2：会话世代 ep 随核心 hello 快照透传，前端据此复位丢帧基线。
+                ["ep"] = _channel.RemoteHello["ep"]?.DeepClone(),
                 ["connected"] = _channel.State == ChannelState.Ready,
                 ["negotiated_with_frontend"] = new JsonArray(
                     (negotiated ?? new HashSet<string>(StringComparer.Ordinal))
@@ -133,24 +134,59 @@ public sealed class Bridge
             return;
         }
 
-        if (cmd == "ping")
+        // 协议 §5（M1）：config.get/set 是壳侧职责（持久化归壳，不转发核心）。
+        if (cmd is "config.get" or "config.set")
         {
-            // dev-only：不起管道、不转发，立刻回壳时间戳，供自检面板量测壳-WebView 单边往返。
-            Post(new JsonObject
-            {
-                ["v"] = 1,
-                ["t"] = "ack",
-                ["id"] = id,
-                ["result"] = new JsonObject
-                {
-                    ["shell_ts"] = IpcFrame.NowMs(),
-                    ["dev_only"] = DevOnlyPing,
-                },
-            });
+            Post(ConfigCommand(id, cmd, frame));
             return;
         }
 
         Post(await _channel.SendCommandAsync(id, frame, CancellationToken.None).ConfigureAwait(false));
+    }
+
+    /// <summary>壳侧 config 自答：dot-path 读写 <see cref="ConfigStore"/>；
+    /// desktop.keep_awake 变更时同步应用电源请求（在 UI 线程执行，线程常驻才能持续持有）。</summary>
+    private JsonObject ConfigCommand(string id, string cmd, JsonObject frame)
+    {
+        try
+        {
+            var data = frame["data"] as JsonObject;
+            var path = data?["path"]?.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(path))
+                return ErrorFrame(id, "bad_request", $"{cmd} requires string data.path");
+
+            JsonNode? value;
+            if (cmd == "config.set")
+            {
+                ConfigStore.Set(path, data?["value"]?.DeepClone());
+                value = ConfigStore.Get(path);
+                Log.Info($"config.set {path} persisted (value={value?.ToJsonString() ?? "null"})");
+
+                if (path == "desktop.keep_awake")
+                {
+                    var enabled = value?.GetValueKind() == JsonValueKind.True;
+                    // P/Invoke 调度到 UI 线程：执行状态标志随线程消亡，后台线程池退出会静默失效。
+                    _ = _dispatcher.InvokeAsync(() => KeepAwake.Apply(enabled));
+                }
+            }
+            else
+            {
+                value = ConfigStore.Get(path);
+            }
+
+            return new JsonObject
+            {
+                ["v"] = 1,
+                ["t"] = "ack",
+                ["id"] = id,
+                ["result"] = new JsonObject { ["value"] = value?.DeepClone() },
+            };
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or JsonException or IOException or ArgumentException)
+        {
+            // 对端帧字段越界：按 §10 回 bad_request，不崩溃（与桩的 SafeString 族同一纪律）。
+            return ErrorFrame(id, "bad_request", $"{cmd} failed: {ex.Message}");
+        }
     }
 
     private static JsonObject ErrorFrame(string? id, string code, string message)

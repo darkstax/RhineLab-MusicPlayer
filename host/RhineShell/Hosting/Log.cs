@@ -3,8 +3,9 @@ using System.IO;
 namespace RhineShell.Hosting;
 
 /// <summary>
-/// M0 骨架的日志出口：一律追加到 <c>%LOCALAPPDATA%\RhineMusic\m0\logs\shell.log</c>，
-/// 同时写 <see cref="System.Diagnostics.Debug"/>。日志只含链路与计数，绝不含任何凭据。
+/// 壳日志出口（长期资产，M1 保留）：一律追加到
+/// <c>%LOCALAPPDATA%\RhineMusic\logs\shell.log</c>，同时写 <see cref="System.Diagnostics.Debug"/>。
+/// 日志只含链路与计数，绝不含任何凭据（防呆条款）。
 /// </summary>
 public static class Log
 {
@@ -13,7 +14,6 @@ public static class Log
     public static string Directory { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "RhineMusic",
-        "m0",
         "logs");
 
     private static string FilePath => Path.Combine(Directory, "shell.log");

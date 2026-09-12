@@ -1,12 +1,12 @@
 <Window x:Class="RhineShell.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Rhine Lab · M0"
+        Title="Rhine Lab · RhineMusic"
         Width="1280" Height="800"
         MinWidth="960" MinHeight="600"
         Background="#101012"
         WindowStartupLocation="CenterScreen">
-  <!-- M0 允许普通窗口（无边框宿主在 M1 与启动动画一起做）。 -->
+  <!-- M1：普通窗口；无边框宿主随启动动画整合在后续里程碑处理。 -->
   <DockPanel>
     <StatusBar DockPanel.Dock="Bottom"
                Background="#18181b" Foreground="#d8d8dc"

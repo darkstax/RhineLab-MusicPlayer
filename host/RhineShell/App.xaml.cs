@@ -7,12 +7,12 @@ namespace RhineShell;
 
 /// <summary>
 /// 应用入口：单实例互斥 + 启动壳窗口。
-/// M0 是骨架，不做托盘/安装器（AUDIO-ENGINE §2 的 Windows 壳在 M1 起再补）。
+/// M1 仍不做托盘/安装器（AUDIO-ENGINE §2 的 Windows 壳完整形态在 M6 安装包阶段补）。
 /// </summary>
 public partial class App : Application
 {
     /// <summary>单实例互斥体名（本机命名空间，不跨会话）。</summary>
-    private const string InstanceMutex = @"Local\RhineShell.M0.SingleInstance";
+    private const string InstanceMutex = @"Local\RhineShell.SingleInstance";
 
     private Mutex? _mutex;
     private ShellOptions _options = ShellOptions.FromCommandLine([]);
@@ -23,7 +23,7 @@ public partial class App : Application
         if (!TryAcquireInstanceMutex(InstanceMutex, out _mutex))
         {
             Log.Info("another RhineShell instance holds the single-instance mutex — exiting");
-            // M0 任务书只要求「重复启动 → 唤前窗」；跨进程激活需要 IPC 广播，M1 随托盘一起补。
+            // 现阶段重复启动直接退出；跨进程「唤前窗」需要 IPC 广播，随 M6 托盘一起补。
             Shutdown(0);
             return;
         }
