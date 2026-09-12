@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <IsPackable>false</IsPackable>
+    <AssemblyName>RhineCoreTests</AssemblyName>
+    <RootNamespace>RhineCoreTests</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    任务书 A：状态机纯逻辑与管道 IO 分离——RhineCoreStub 只发布 Program/FakeEngine 两个源文件进
+    测试工程（不引用 windows TFM 的桩工程本身，dotnet test 可在任意平台跑）。
+    FakeEngine.cs 是唯一被测对象；M2 的 C++ 实现用同一张转换表对拍。
+  -->
+  <ItemGroup>
+    <Compile Include="..\RhineCoreStub\FakeEngine.cs" Link="FakeEngine.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+</Project>

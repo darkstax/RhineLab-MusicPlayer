@@ -8,13 +8,18 @@ using RhineShared;
 namespace RhineCoreStub;
 
 /// <summary>
-/// M0 音频核心桩：冒充将来的 C++ + miniaudio 核心，只实现 <c>docs/IPC-PROTOCOL.md</c> v1
-/// 在 M0 声明的最小集（hello / echo / 1Hz state evt / bye），用于验证壳与前端桥的往返链路。
+/// M1 音频核心桩：冒充将来的 C++ + miniaudio 核心，实现 <c>docs/IPC-PROTOCOL.md</c> v1.2
+/// 在 M1 声明的命令集（hello / echo / engine.* / 1Hz position+state evt / bye）。
+/// 状态机本体在 <see cref="FakeEngine"/>（纯逻辑、可 dotnet test），本文件只做管道 IO 与协议拼装；
+/// M2 换真核心时按同一 FakeEngine 语义在 C++ 重写并对拍。
 ///
 /// 协议纪律：**不得自加字段**。任何新增消息或字段都必须先改协议文档。
-/// 命令行：<c>RhineCoreStub [--pipe &lt;name&gt;] [--kill-after &lt;sec&gt;] [--verbose]</c>
-/// 环境变量：<c>RHINE_CORE_PIPE</c>（协议 §1 的 core.pipe 覆盖项）
-/// 退出码：0 = 有序退出（收到 bye 或 stdin exit/bye）；3 = 已有核心实例占用管道；7 = --kill-after 模拟崩溃。
+/// 命令行：<c>RhineCoreStub [--pipe &lt;name&gt;] [--kill-after &lt;sec&gt;] [--halt-events &lt;sec&gt;]
+///            [--trace &lt;file&gt;] [--verbose]</c>
+/// 环境变量：<c>RHINE_CORE_PIPE</c>（协议 §1 的 core.pipe 覆盖项）、<c>RHINE_STUB_STATE_FILE</c>
+/// （配置持久化落点覆盖，验收用）。
+/// 退出码：0 = 有序退出（收到 bye 或 stdin exit/bye）；3 = 已有核心实例占用管道；
+/// 5 = 会话未预期异常；7 = --kill-after 模拟崩溃。
 /// </summary>
 internal static class Program
 {
@@ -23,8 +28,20 @@ internal static class Program
     private const string App = "rhine-music-player";
     private const string Ver = "0.1.0";
 
-    /// <summary>协议 §4：M0 打桩核心只声明 echo。</summary>
-    private static readonly string[] Caps = ["echo"];
+    /// <summary>协议 §4/§5：M1 核心声明 echo 与 engine.* 全集（§5 表 M1 行）。
+    /// devices/output/diag 属 M3/M4：caps 里不声明，被调用时按 §5 回 not_implemented。</summary>
+    private static readonly string[] Caps =
+    [
+        "echo",
+        "engine.state",
+        "engine.play",
+        "engine.pause",
+        "engine.resume",
+        "engine.stop",
+        "engine.toggle",
+        "engine.seek",
+        "engine.volume",
+    ];
 
     private static readonly CancellationTokenSource Shutdown = new();
     private static readonly SemaphoreSlim WriteGate = new(1, 1);
@@ -37,17 +54,36 @@ internal static class Program
     private static int _connections;
     private static volatile StreamWriter? _sessionWriter;
 
+    /// <summary>协议 §4（v1.2）：会话世代。每次 hello 成功应答自增，evt 帧带 ep=本值，
+    /// 供接收侧区分「丢帧」与「核心重启/新会话」（丢帧检测跨重连复位）。</summary>
+    private static long _epoch;
+
+    /// <summary>任务书验收 4 的调试开关：<c>--halt-events N</c> 暂停 evt 输出 N 秒
+    /// （seq 照常消耗、帧不发 = 制造接收侧可检测的真实丢帧）。</summary>
+    private static int _haltSeconds;
+    private static long _haltUntilUptimeMs;
+
+    /// <summary>任务书验收 2 的落盘 trace（与壳日志双证）；未指定 --trace 时仅日志。</summary>
+    private static StreamWriter? _trace;
+
+    /// <summary>假引擎单例：状态跨连接保留（页面刷新/壳重连不重置播放），音量另有文件持久化。</summary>
+    private static readonly FakeEngine Engine = new(IpcFrame.NowMs);
+
+    private static long Epoch => Interlocked.Read(ref _epoch);
+
     private static async Task<int> Main(string[] args)
     {
         TryUseUtf8Console();
 
         if (args.Contains("--help") || args.Contains("-h"))
         {
-            Console.WriteLine("RhineCoreStub — M0 core stub (IPC protocol v1)");
-            Console.WriteLine("  --pipe <name>       named pipe (default: \\\\.\\pipe\\rhine-music.core.v1)");
-            Console.WriteLine("  --kill-after <sec>  simulate a crash after N seconds (exit code 7)");
-            Console.WriteLine("  --verbose           log every frame");
-            Console.WriteLine("  stdin: 'exit' or 'bye' => orderly shutdown");
+            Console.WriteLine("RhineCoreStub — M1 core stub (IPC protocol v1.2, fake engine)");
+            Console.WriteLine("  --pipe <name>          named pipe (default: \\\\.\\pipe\\rhine-music.core.v1)");
+            Console.WriteLine("  --kill-after <sec>     simulate a crash after N seconds (exit code 7)");
+            Console.WriteLine("  --halt-events <sec>    drop evt output for N seconds (seq keeps burning; frame-loss test hook)");
+            Console.WriteLine("  --trace <file>         append every emitted engine event to a file (acceptance evidence)");
+            Console.WriteLine("  --verbose              log every frame");
+            Console.WriteLine("  stdin: 'exit' or 'bye' => orderly shutdown; 'halt <sec>' => halt events at runtime");
             return 0;
         }
 
@@ -56,6 +92,37 @@ internal static class Program
         var pipe = ArgValue(args, "--pipe")
             ?? Environment.GetEnvironmentVariable("RHINE_CORE_PIPE")
             ?? DefaultPipe;
+
+        if (ArgValue(args, "--halt-events") is { } haltText && int.TryParse(haltText, out var haltSeconds) && haltSeconds > 0)
+        {
+            _haltSeconds = haltSeconds;
+            Log("info", $"evt halt armed: {haltSeconds}s (applies on first hello handshake)");
+        }
+
+        if (ArgValue(args, "--trace") is { } tracePath)
+        {
+            try
+            {
+                var directory = Path.GetDirectoryName(Path.GetFullPath(tracePath));
+                if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+                _trace = new StreamWriter(tracePath, append: false, new UTF8Encoding(false))
+                {
+                    AutoFlush = true,
+                };
+                Log("info", $"trace -> {Path.GetFullPath(tracePath)}");
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Log("error", $"cannot open trace file: {ex.Message}");
+            }
+        }
+
+        // 任务书 A7：音量/模式从 %APPDATA%\RhineMusic\stub-state.json 恢复（壳侧 config 是另一份）。
+        if (StubStateFile.Load() is (var storedVolume, var storedMode))
+        {
+            Engine.SetVolume(storedMode, storedVolume);
+            Log("info", $"stub-state restored volume={storedVolume:F2} mode={storedMode}");
+        }
 
         if (ArgValue(args, "--kill-after") is { } killText && int.TryParse(killText, out var killSeconds) && killSeconds > 0)
         {
@@ -110,7 +177,7 @@ internal static class Program
             }
             catch (Exception ex)
             {
-                // 审查 P1-A：会话内未预期异常（帧字段越界已由 SafeString/Num 拦截，此为未知类型兑底）
+                // 审查 P1-A：会话内未预期异常（帧字段越界已由 SafeString/Num 拦截，此为未知类型兜底）
                 // 不得伪装成退出码 0——Session 的 finally 已 poison Shutdown，原地续命不可行；
                 // 以非零码退出，让壳的崩溃重启监管（M1）看见真实崩溃。
                 Log("error", $"session fault → exit 5: {ex.GetType().Name}: {ex.Message}");
@@ -135,6 +202,7 @@ internal static class Program
         }
 
         Log("info", "stopped");
+        _trace?.Dispose();
         return 0;
     }
 
@@ -169,7 +237,7 @@ internal static class Program
         Orderly,
     }
 
-    /// <summary>单连接会话：握手 → 帧循环（读任务 + 1Hz 事件任务）。</summary>
+    /// <summary>单连接会话：握手 → 帧循环（读任务 + 1Hz tick 事件任务）。</summary>
     private static async Task<SessionOutcome> Session(NamedPipeServerStream server)
     {
         using var reader = new StreamReader(server, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
@@ -260,17 +328,31 @@ internal static class Program
             return false;
         }
 
-        Log("info", $"hello from role={peerRole} proto={peerProto} caps=[{peerCaps}]");
+        // 协议 §4（v1.2）：每次 hello 成功应答自增会话世代 ep。
+        var epoch = Interlocked.Increment(ref _epoch);
+        Log("info", $"hello from role={peerRole} proto={peerProto} caps=[{peerCaps}] ep={epoch}");
         await send.Send(new JsonObject
         {
             ["v"] = Proto,
             ["t"] = "hello",
             ["role"] = "core",
             ["proto"] = Proto,
+            ["ep"] = epoch,
             ["caps"] = new JsonArray(Caps.Select(c => (JsonNode)JsonValue.Create(c)!).ToArray()),
             ["app"] = App,
             ["ver"] = Ver,
         }).ConfigureAwait(false);
+
+        // 协议 §9：断线重连必补发最新 state 快照（FakeEngine 跨连接保留状态，重连后 UI 立即一致）。
+        await Emit(send, new EngineEvent("state", Engine.Snapshot())).ConfigureAwait(false);
+
+        // 验收 4 的 halt 钩子：握手成功时刻开始暂停 evt 输出（--halt-events N 或 stdin 'halt N'）。
+        if (_haltSeconds > 0)
+        {
+            Interlocked.Exchange(ref _haltUntilUptimeMs, Uptime.ElapsedMilliseconds + _haltSeconds * 1000L);
+            Log("info", $"evt halted for {_haltSeconds}s (seq keeps burning, frames suppressed)");
+        }
+
         return true;
     }
 
@@ -290,9 +372,8 @@ internal static class Program
         switch (type)
         {
             case "cmd":
-                // 并发处理命令：**不能** 在读写循环里 `await HandleCommand`，否则 echo 的 1–8ms
-                // 人工延迟会把后续命令排成队（实测 p95 从十几毫秒涨到百毫秒级），
-                // 延迟直方图就量不到链路开销。写路径经 `WriteGate` 串行，ack 靠 `id` 路由，不依赖到达顺序。
+                // 并发处理命令：**不能** 在读写循环里 `await HandleCommand`，否则人工延迟会把后续命令排成队。
+                // 写路径经 `WriteGate` 串行，ack 靠 `id` 路由，不依赖到达顺序（M0 D3 结论沿用）。
                 _ = RunCommandAsync(frame, send);
                 break;
             case "bye":
@@ -342,7 +423,7 @@ internal static class Program
 
         if (cmd == "echo")
         {
-            // 任务书：ack 原样回带 + 1–8ms 随机人工延迟（延迟直方图用）。不附加任何自加字段。
+            // M0 回归：ack 原样回带 + 1–8ms 随机人工延迟（延迟直方图用）。不附加任何自加字段。
             var delay = Jitter.Next(1, 9);
             await Task.Delay(delay).ConfigureAwait(false);
             var payload = frame.TryGetPropertyValue("data", out var data) ? data?.DeepClone() : JsonValue.Create((string?)null);
@@ -357,9 +438,107 @@ internal static class Program
             return;
         }
 
-        // 协议 §5：未实现的 cmd 必须回 not_implemented，不得静默丢弃。
-        await send.Send(Error(id, "not_implemented", $"cmd '{cmd}' is not implemented by this M0 stub", retryable: false)).ConfigureAwait(false);
-        Log("warn", $"not_implemented id={id} cmd={cmd}");
+        try
+        {
+            var (result, events) = Execute(cmd, frame);
+            await send.Send(new JsonObject
+            {
+                ["v"] = Proto,
+                ["t"] = "ack",
+                ["id"] = id,
+                ["result"] = result is null ? null : ToJson(result),
+            }).ConfigureAwait(false);
+            foreach (var engineEvent in events)
+            {
+                await Emit(send, engineEvent).ConfigureAwait(false);
+            }
+
+            Log("info", $"cmd ok id={id} cmd={cmd}");
+        }
+        catch (EngineBadRequest ex)
+        {
+            await send.Send(Error(id, "bad_request", ex.Message, retryable: false)).ConfigureAwait(false);
+            Log("warn", $"bad_request id={id} cmd={cmd}: {ex.Message}");
+        }
+        catch (EngineNotImplemented ex)
+        {
+            // 协议 §5：未实现的 cmd 必须回 not_implemented，不得静默丢弃。
+            await send.Send(Error(id, "not_implemented", ex.Message, retryable: false)).ConfigureAwait(false);
+            Log("warn", $"not_implemented id={id} cmd={cmd}");
+        }
+    }
+
+    /// <summary>
+    /// 协议 §5 的 M1 命令集（engine.*）。返回 ack 的 result 与需要立刻补发的事件
+    /// （任务书 A2：seek/volume/state 变更即时生效并立刻补发一帧 position+state）。
+    /// </summary>
+    private static (Dictionary<string, object?>? Result, List<EngineEvent> Events) Execute(string cmd, JsonObject frame)
+    {
+        var data = frame["data"] as JsonObject;
+        switch (cmd)
+        {
+            case "engine.state":
+                return (Engine.Snapshot(), []);
+            case "engine.play":
+            {
+                var trackId = Str(data!, "track_id");
+                if (string.IsNullOrEmpty(trackId))
+                    throw new EngineBadRequest("engine.play requires a non-empty track_id");
+                var duration = Num(data!, "duration_ms");
+                var position = Num(data!, "position_ms");
+                if (duration is < 1) throw new EngineBadRequest("duration_ms must be >= 1");
+                if (position is < 0) throw new EngineBadRequest("position_ms must be >= 0");
+                var events = Engine.Play(trackId, duration is null ? null : (long)duration.Value, position is null ? null : (long)position.Value);
+                return (new Dictionary<string, object?> { ["stream_token"] = Engine.NextStreamToken() }, events);
+            }
+            case "engine.pause":
+                return (PauseResume(Engine.Pause));
+            case "engine.resume":
+                return (PauseResume(Engine.Resume));
+            case "engine.stop":
+                return (PauseResume(Engine.Stop));
+            case "engine.toggle":
+                return (PauseResume(Engine.Toggle));
+            case "engine.seek":
+            {
+                var position = Num(data!, "position_ms");
+                if (position is null) throw new EngineBadRequest("engine.seek requires number position_ms");
+                var (applied, events) = Engine.Seek((long)position.Value);
+                return (
+                    new Dictionary<string, object?> { ["applied_ms"] = applied },
+                    events);
+            }
+            case "engine.volume":
+            {
+                var mode = Str(data!, "mode");
+                if (mode is null) throw new EngineBadRequest("engine.volume requires string mode (fixed/hardware/integer/float)");
+                var value = Num(data!, "value"); // 越界值由引擎按 §7 钳制（钳制失败才 bad_request）
+                var (effectiveMode, effectiveValue, events) = Engine.SetVolume(mode, value);
+                // A7：音量/模式持久化（写失败不影响命令成功）。
+                StubStateFile.Save(effectiveValue, effectiveMode, message => Log("warn", message));
+                return (
+                    new Dictionary<string, object?>
+                    {
+                        ["effective"] = new Dictionary<string, object?> { ["mode"] = effectiveMode, ["value"] = effectiveValue },
+                    },
+                    events);
+            }
+            // M3/M4 能力先占名（§5）：一律 not_implemented，不得静默丢弃。
+            case "devices.list" or "devices.select" or "output.mode" or "diag.get":
+                throw new EngineNotImplemented($"cmd '{cmd}' is not implemented before M3/M4");
+            case "engine.preload" or "engine.cancel_preload" or "engine.queue" or "config.get" or "config.set"
+                or "library.scan" or "library.query" or "taskbar.set":
+                throw new EngineNotImplemented($"cmd '{cmd}' is not implemented by this M1 stub");
+            default:
+                throw new EngineNotImplemented($"cmd '{cmd}' is not implemented by this stub");
+        }
+    }
+
+    /// <summary>pause/resume/stop/toggle 的共同形状：result={state}（协议 §5），事件=立刻补发的 state+position。</summary>
+    private static (Dictionary<string, object?>, List<EngineEvent>) PauseResume(Func<List<EngineEvent>> action)
+    {
+        var events = action();
+        return (new Dictionary<string, object?> { ["state"] = Engine.State.ToWire() }, events);
     }
 
     private static JsonObject Error(string? id, string code, string message, bool retryable)
@@ -379,26 +558,86 @@ internal static class Program
         return frame;
     }
 
-    /// <summary>协议 §6：每 1s 推 evt{evt:"state", seq 递增}。连接期间持续，断线即停。</summary>
+    /// <summary>把引擎的字典结果转 JsonNode（negotiated/badges 的 null 值必须保留——协议 §6 的显式豁免语义）。</summary>
+    private static JsonNode? ToJson(object value) => value switch
+    {
+        IReadOnlyDictionary<string, object?> map => AsObject(map),
+        _ => JsonValueOf(value) ?? JsonValue.Create((string?)null),
+    };
+
+    private static JsonObject AsObject(IReadOnlyDictionary<string, object?> map)
+    {
+        var obj = new JsonObject();
+        foreach (var (key, value) in map) obj[key] = JsonValueOf(value);
+        return obj;
+    }
+
+    private static JsonNode? JsonValueOf(object? value) => value switch
+    {
+        null => null,
+        string s => JsonValue.Create(s),
+        bool b => JsonValue.Create(b),
+        int i => JsonValue.Create(i),
+        long l => JsonValue.Create(l),
+        double d => JsonValue.Create(d),
+        List<string> list => new JsonArray(list.Select(s => (JsonNode)JsonValue.Create(s)!).ToArray()),
+        IReadOnlyDictionary<string, object?> map => AsObject(map),
+        _ => throw new InvalidOperationException($"unsupported result type {value.GetType().Name}"),
+    };
+
+    /// <summary>
+    /// 每秒 tick（任务书 A2）：发 evt{kind:"position"}；播完自动 evt{kind:"state",state:"stopped"}。
+    /// 与命令补发帧共用 <see cref="Emit"/>，seq 单调、ep 恒为当前会话世代。
+    /// </summary>
     private static async Task PublishEvents(PipeSink send)
     {
         while (!Shutdown.IsCancellationRequested)
         {
             await Task.Delay(TimeSpan.FromSeconds(1), Shutdown.Token).ConfigureAwait(false);
-            var seq = Interlocked.Increment(ref _sequence);
-            await send.Send(new JsonObject
+            foreach (var engineEvent in Engine.Tick())
             {
-                ["v"] = Proto,
-                ["t"] = "evt",
-                ["seq"] = seq,
-                ["evt"] = "state",
-                ["data"] = new JsonObject
-                {
-                    ["state"] = "idle",
-                    ["stub"] = true,
-                },
-            }).ConfigureAwait(false);
-            if (_verbose) Log("debug", $"evt state seq={seq}");
+                await Emit(send, engineEvent).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>统一出口：seq 进程内单调（§6）、ep 会话世代（v1.2）、halt 窗口内只烧 seq 不发帧。</summary>
+    private static async Task Emit(PipeSink send, EngineEvent engineEvent)
+    {
+        var seq = Interlocked.Increment(ref _sequence);
+        var halted = Uptime.ElapsedMilliseconds < Interlocked.Read(ref _haltUntilUptimeMs);
+        if (halted)
+        {
+            Log("warn", $"evt {engineEvent.Kind} seq={seq} suppressed by --halt-events window (burned for loss detection)");
+            return;
+        }
+
+        await send.Send(new JsonObject
+        {
+            ["v"] = Proto,
+            ["t"] = "evt",
+            ["seq"] = seq,
+            ["ep"] = Epoch,
+            ["evt"] = engineEvent.Kind,
+            ["data"] = ToJson((object)engineEvent.Data),
+            ["ts"] = IpcFrame.NowMs(),
+        }).ConfigureAwait(false);
+        Trace(seq, engineEvent);
+        if (_verbose) Log("debug", $"evt {engineEvent.Kind} seq={seq} ep={Epoch}");
+    }
+
+    /// <summary>trace 行不是协议帧：一行一条，只含 kind + seq + data（验收 2 的位置推进证据）。</summary>
+    private static void Trace(long seq, EngineEvent engineEvent)
+    {
+        if (_trace is null) return;
+        try
+        {
+            var data = AsObject(engineEvent.Data);
+            _trace.WriteLine($"{DateTime.Now:HH:mm:ss.fff} evt={engineEvent.Kind} seq={seq} ep={Epoch} data={data.ToJsonString(IpcFrame.Json)}");
+        }
+        catch (IOException ex)
+        {
+            Log("warn", $"trace write failed: {ex.Message}");
         }
     }
 
@@ -408,8 +647,20 @@ internal static class Program
         {
             while (await Console.In.ReadLineAsync(Shutdown.Token).ConfigureAwait(false) is { } line)
             {
-                var text = line.Trim().ToLowerInvariant();
-                if (text is not ("exit" or "bye")) continue;
+                var text = line.Trim();
+                if (text.StartsWith("halt", StringComparison.OrdinalIgnoreCase))
+                {
+                    // 运行中触发丢帧窗口：'halt 5' = 暂停 evt 输出 5 秒（验收 4 用，免重启进程）。
+                    if (int.TryParse(text[4..].Trim(), out var seconds) && seconds > 0)
+                    {
+                        Interlocked.Exchange(ref _haltUntilUptimeMs, Uptime.ElapsedMilliseconds + seconds * 1000L);
+                        Log("info", $"evt halted for {seconds}s via stdin");
+                    }
+
+                    continue;
+                }
+
+                if (text.ToLowerInvariant() is not ("exit" or "bye")) continue;
 
                 // 有序退出：先向对端发 bye（协议 §3），再结束会话与进程。
                 if (_sessionWriter is { } writer)
@@ -466,12 +717,14 @@ internal static class Program
 
     // 审查 P1-A：对端帧字段类型越界（合法 JSON 但 t 非字符串/proto 非数字等）不得抛
     // InvalidOperationException 穿栈；按协议 §10 降级为“丢弃该帧/默认值”，不崩溃。
+    // 任务书铁律：对端帧取值全部走 SafeString 族（d0a8acc 已立规范），新增命令解析同样走它。
     private static string? IpcType(JsonObject frame) => SafeString(frame["t"]);
 
-    private static string? Str(JsonObject frame, string name) => SafeString(frame[name]);
+    private static string? Str(JsonObject? frame, string name) => frame is null ? null : SafeString(frame[name]);
 
-    private static double? Num(JsonObject frame, string name)
+    private static double? Num(JsonObject? frame, string name)
     {
+        if (frame is null) return null;
         try { return frame[name]?.GetValue<double>(); }
         catch (InvalidOperationException) { return null; }
     }
@@ -480,6 +733,7 @@ internal static class Program
     {
         try { return node?.GetValue<string>(); }
         catch (InvalidOperationException) { return null; }
+        catch (JsonException) { return null; }
     }
 
     private static string? ArgValue(string[] args, string name)
