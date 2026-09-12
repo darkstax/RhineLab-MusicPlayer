@@ -9,7 +9,9 @@
   bottom: 18px;
   transform: translateX(-50%);
   z-index: 90;
-  max-width: min(980px, calc(100vw - 32px));
+  /* UI 修复：原 max-width + shrink-to-fit 在中等宽度下把 identity 压到 142px（内容需 213px），
+     徽章溢出盒子叠上播放钮；改为显式定宽，flex 分配才有确定的剩余空间可分。 */
+  width: min(980px, calc(100vw - 32px));
   font-size: 12px;
   letter-spacing: 0.04em;
   color: var(--theme-ink, #080a08);
@@ -31,8 +33,9 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  min-width: 0;
-  flex: 1 1 220px;
+  /* UI 修复：identity 不参与收缩（state+标题窗口+徽章全部不可压），剩余空间由 progress
+     吸收；否则定宽标题下徽章被挤溢出叠到播放钮（实测 badges.right=460 > controls.x=432）。 */
+  flex: 0 0 auto;
 }
 
 #player-bar .pb-state {
@@ -50,17 +53,41 @@
 }
 
 #player-bar .pb-title {
-  min-width: 8ch;
+  /* UI 修复（用户定方向）：超长曲目/歌词**不再截断死磕**，改横向滚动跑马灯：
+     外层定宽窗口 overflow hidden，内层 .pb-title-roll 按内容宽，溢出时 JS 挂
+     pb-overflow 类 + CSS 变量驱动来回滚动；悬停暂停方便读。reduced-motion 降级截断。 */
+  position: relative;
+  flex: 0 0 150px;
+  width: 150px;
+  min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--theme-ink, #080a08);
 }
+#player-bar .pb-title-roll {
+  display: inline-block;
+  white-space: pre;
+  will-change: transform;
+}
+#player-bar .pb-title.pb-overflow .pb-title-roll {
+  animation: pb-marquee var(--pb-roll-dur, 8s) ease-in-out infinite alternate;
+}
+#player-bar .pb-title.pb-overflow:hover .pb-title-roll {
+  animation-play-state: paused;
+}
+@keyframes pb-marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(var(--pb-roll-dist, -40px)); }
+}
+/* 滚动文字组件根就是 .pb-title 本身：inline-block 会按内容撑开，改 block 让它尊重容器宽度。 */
+/* （旧规则已删：组件根现在就是 .pb-title-roll，由上方 inline-block 按内容宽撑开，
+   外层 .pb-title 定宽窗口 + overflow hidden 负责裁切与跑马灯动画。） */
 
 #player-bar .pb-badges {
   display: inline-flex;
   gap: 6px;
   white-space: nowrap;
+  flex-shrink: 0; /* UI 修复：徽章不得被压扁/溢出，宁可让标题截断 */
 }
 
 #player-bar .fb-badge {
@@ -99,7 +126,8 @@
 }
 
 #player-bar .pb-progress {
-  flex: 2 1 240px;
+  flex: 2 1 200px; /* UI 修复：下限 240→200，优先保 identity */
+  min-width: 120px;
   height: 22px;
   display: flex;
   align-items: center;
@@ -155,6 +183,7 @@
 
 #player-bar .pb-volume input {
   width: 84px;
+  min-width: 56px;
   accent-color: var(--theme-accent, #9b7247);
 }
 
@@ -189,7 +218,9 @@
   padding: 4px 10px;
 }
 
-@media (max-width: 720px) {
+/* UI 修复：980px 定宽下单行已可容纳；真正的窄窗口（<820px）才换行，
+   阈值从 720 上调到 820，避免临界宽度下再次重叠。 */
+@media (max-width: 820px) {
   #player-bar .pb-main {
     flex-wrap: wrap;
     row-gap: 8px;

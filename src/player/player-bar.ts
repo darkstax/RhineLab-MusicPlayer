@@ -27,6 +27,34 @@ const STATE_LABEL: Record<PlayerSnapshot["state"], string> = {
   stopped: "STOPPED",
 };
 
+/**
+ * UI 修复：滚动文字组件的视觉层是绝对定位子元素，CSS ellipsis 对它无效（硬裁无“…”），
+ * 故在喂给组件前先按容器可用宽度用 canvas 测量截断——移植上游 workbench-rolling.ts
+ * fitMediaText 的二分套路，但宽度基准取 .pb-title 自身 clientWidth（上游取 parentElement）。
+ */
+const textMeasure = document.createElement("canvas").getContext("2d");
+function fitTitleText(element: HTMLElement, text: string): string {
+  element.title = text; // 全文可达（同上游 title 约定）
+  if (!textMeasure) return text;
+  const width = element.clientWidth;
+  if (!width) return text;
+  const style = getComputedStyle(element);
+  textMeasure.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+  const spacing = parseFloat(style.letterSpacing) || 0;
+  const measure = (value: string) =>
+    textMeasure.measureText(value).width + [...value].length * spacing;
+  if (measure(text) <= width) return text;
+  const chars = [...text];
+  let low = 0,
+    high = chars.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (measure(chars.slice(0, mid).join("") + "…") <= width) low = mid;
+    else high = mid - 1;
+  }
+  return chars.slice(0, low).join("") + "…";
+}
+
 export function mountPlayerBar(root: HTMLElement): () => void {
   root.hidden = true;
   root.setAttribute("aria-label", "播放控制条");
@@ -35,7 +63,7 @@ export function mountPlayerBar(root: HTMLElement): () => void {
     <div class="pb-main">
       <div class="pb-identity">
         <span class="pb-state" data-state="idle">IDLE</span>
-        <span class="pb-title" aria-live="polite"></span>
+        <span class="pb-title" aria-live="polite"><span class="pb-title-roll"></span></span>
         <span class="pb-badges"></span>
       </div>
       <div class="pb-controls">
@@ -61,6 +89,7 @@ export function mountPlayerBar(root: HTMLElement): () => void {
   const el = (selector: string) => root.querySelector<HTMLElement>(selector)!;
   const stateEl = el(".pb-state");
   const titleEl = el(".pb-title");
+  const rollEl = el(".pb-title-roll");
   const badgesEl = el(".pb-badges");
   const toggleEl = el(".pb-toggle") as HTMLButtonElement;
   const stopEl = el(".pb-stop") as HTMLButtonElement;
@@ -75,7 +104,10 @@ export function mountPlayerBar(root: HTMLElement): () => void {
   const toastEl = el(".pb-toast");
 
   // 曲目名用上游同款滚动文字（direct / 同时启动 / 460ms，与主标题一致）。
-  const rolling = createRollingText(titleEl, {
+  // UI 修复（用户定方向）：组件挂在**内层 .pb-title-roll**（按内容宽），外层 .pb-title 是
+  // 150px 窗口；内容溢出时挂 pb-overflow 类由 CSS 跑马灯来回滚动，悬停暂停；
+  // reduced-motion 降级为截断加省略号（fitTitleText）。title 属性永远给全文。
+  const rolling = createRollingText(rollEl, {
     text: playerStore.state.trackLabel,
     duration: 460,
     motionBlur: !reducedMotion(),
@@ -86,7 +118,7 @@ export function mountPlayerBar(root: HTMLElement): () => void {
 
   const badges = new FidelityBadges(badgesEl);
 
-  let lastLabel = playerStore.state.trackLabel;
+  let lastLabel: string | null = null; // 哨兵：首帧 subscribe 必须跑一次 applyTitle（溢出测量要等 visible 后才有真实宽度）。
   let dragging = false;
   let suppressVolumeEvent = false;
 
@@ -173,7 +205,29 @@ export function mountPlayerBar(root: HTMLElement): () => void {
 
     if (snapshot.trackLabel !== lastLabel) {
       lastLabel = snapshot.trackLabel;
-      rolling.update({ text: snapshot.trackLabel, animated: !reducedMotion() });
+      const text = snapshot.trackLabel;
+      titleEl.title = text; // 全文可达（悬停 tooltip）
+      rolling.update({
+        // reduced-motion 降级：无滚动时用 canvas 截断补“…”（fit 基准=外层 150px 窗口）；
+        // 否则全文交给内层组件，溢出部分由跑马灯展示。
+        text: reducedMotion() ? fitTitleText(titleEl, text) : text,
+        animated: !reducedMotion(),
+      });
+      // 溢出测量要等组件渲染完成（rAF 后下一帧布局就绪）；悬停暂停在 CSS 里。
+      if (!reducedMotion()) {
+        requestAnimationFrame(() => {
+          const dist = rollEl.offsetWidth - titleEl.clientWidth;
+          if (dist > 1) {
+            titleEl.style.setProperty("--pb-roll-dist", `${-(dist + 4)}px`);
+            titleEl.style.setProperty("--pb-roll-dur", `${Math.max(4, (dist + 4) / 14)}s`); // ≈14px/s
+            titleEl.classList.add("pb-overflow");
+          } else {
+            titleEl.classList.remove("pb-overflow");
+          }
+        });
+      } else {
+        titleEl.classList.remove("pb-overflow");
+      }
     }
 
     const ratio = snapshot.durationMs > 0 ? Math.min(1, snapshot.positionMs / snapshot.durationMs) : 0;
