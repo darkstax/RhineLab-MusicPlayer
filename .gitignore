@@ -25,3 +25,8 @@ reference/local-files-connection.js
 # Individually licensed MyFonts kit; install locally, never publish to Git.
 public/fonts/novecento/
 .vercel/
+
+# .NET host shell (M0): build output stays out of the repository
+host/**/bin/
+host/**/obj/
+dist-host/
