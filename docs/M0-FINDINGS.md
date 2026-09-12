@@ -133,3 +133,31 @@ shell.log：`core reconnect in 500ms attempt=1 → 1000 → 2000 → 4000 → 50
 
 - playwright MCP 本会话全部超时不可用，改用缓存里的 `chromium_headless_shell` + `playwright-core`（装在 /tmp，不入库）。
 - 验证中途长时间观察到“壳无声消失”均源于 D5/D6，修复后所有场景可重复。
+
+## 7. 审查意见处置与 P1 修复（reviewer-qwen 报告后，2026-09-12）
+
+审查结论：**可合入，无 P0**。P1-A/B 本轮修复，P1-C 与部分 P2 转 M1 待办。
+
+### 已修
+- **P1-A（桩：对端帧字段类型越界带崩进程 + 伪装退出码 0）**
+  `host/RhineCoreStub/Program.cs`：`IpcType/Str` 改走 `SafeString`、`Num` 加 `catch
+  InvalidOperationException`（协议 §10：非法帧只要求不崩溃+丢弃）；`Main` 会话层补
+  `catch (Exception)` → 记录后 **exit 5**（Session finally 已 poison Shutdown，原地续命不可行；
+  非零码让 M1 的崩溃重启监管能真正看见）。
+  复审实测（C:\Users\StarL\m0-review 镜像，pwsh 直连管道三场景）：
+  `protostr / tbad / sess-tbad` 全部 `alive=True`，日志分别收敛为
+  `hello role=shell`（proto 容错回退）、`first frame is not hello — closing`+继续监听、
+  `hello` 后会话存活 —— 原 `Unhandled exception` 崩溃路径消失。
+- **P1-B（壳：断线后重放陈旧 LatestState，seq 倒退风险）**
+  `ShellChannel.cs` 断开 finally 段补 `LatestState = null`（与 `RemoteHello` 同生命周期）；
+  重连后由核心 1Hz 新 state 取代，不再向前端投递跨核心生命周期的过期快照。
+- 回归：镜像仓 `m0-build -SkipFrontend` + `m0-run -SelfCheckDump` 全链路重跑 →
+  handshake ok / echo 100/100 / **p50=15.4 p95=16.7ms** / 有序 bye exit=0。
+
+### 驳回与延后（含理由）
+- **P2 全表（≤64KB 行长强制、ShellChannel/Bridge 同类 GetValue 越界、第二实例 bye 路径、
+  日志含路径等）不修**：信任边界内自家进程 IPC，走查证实现有 catch/重连路径已兜住且
+  全仓无"字段写成对象/数组"的发送路径；防御性加固属假想攻击面，按项目纪律仅备案。
+- **P1-C（前端 evt seq 丢帧检测未落地）→ M1 首批任务**：M0 的 1Hz 桩事件无功能影响，
+  但 M4 的 30Hz spectrum 必须依赖它验证"事件可丢"公理；连同 P2-4（proto 不匹配的 err 帧语义）、
+  P2-5（把壳注入的 state/core 字段收编进 IPC-PROTOCOL §4）一并入 M1 待办。

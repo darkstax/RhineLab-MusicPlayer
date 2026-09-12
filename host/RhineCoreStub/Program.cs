@@ -108,6 +108,15 @@ internal static class Program
             {
                 Log("warn", $"connection lost: {ex.Message}");
             }
+            catch (Exception ex)
+            {
+                // 审查 P1-A：会话内未预期异常（帧字段越界已由 SafeString/Num 拦截，此为未知类型兑底）
+                // 不得伪装成退出码 0——Session 的 finally 已 poison Shutdown，原地续命不可行；
+                // 以非零码退出，让壳的崩溃重启监管（M1）看见真实崩溃。
+                Log("error", $"session fault → exit 5: {ex.GetType().Name}: {ex.Message}");
+                Console.Out.Flush();
+                return 5;
+            }
             finally
             {
                 await server.DisposeAsync().ConfigureAwait(false);
@@ -455,11 +464,23 @@ internal static class Program
 
     private static JsonObject? Parse(string line) => IpcFrame.ParseObject(line);
 
-    private static string? IpcType(JsonObject frame) => frame["t"]?.GetValue<string>();
+    // 审查 P1-A：对端帧字段类型越界（合法 JSON 但 t 非字符串/proto 非数字等）不得抛
+    // InvalidOperationException 穿栈；按协议 §10 降级为“丢弃该帧/默认值”，不崩溃。
+    private static string? IpcType(JsonObject frame) => SafeString(frame["t"]);
 
-    private static string? Str(JsonObject frame, string name) => frame[name]?.GetValue<string>();
+    private static string? Str(JsonObject frame, string name) => SafeString(frame[name]);
 
-    private static double? Num(JsonObject frame, string name) => frame[name]?.GetValue<double>();
+    private static double? Num(JsonObject frame, string name)
+    {
+        try { return frame[name]?.GetValue<double>(); }
+        catch (InvalidOperationException) { return null; }
+    }
+
+    private static string? SafeString(JsonNode? node)
+    {
+        try { return node?.GetValue<string>(); }
+        catch (InvalidOperationException) { return null; }
+    }
 
     private static string? ArgValue(string[] args, string name)
     {

@@ -310,6 +310,8 @@ public sealed class ShellChannel : IAsyncDisposable
 
                 _writer = null;
                 RemoteHello = null;
+                LatestState = null; // 审查 P1-B：陈旧快照不得跨核心生命周期重放（新实例 seq 从 1 重新开始）；
+                                    // 重连后等新 state 到达（桩 1Hz）再重放。
                 SetState(ChannelState.Disconnected);
                 FailPending("disconnected", "core connection lost", retryable: true);
             }
