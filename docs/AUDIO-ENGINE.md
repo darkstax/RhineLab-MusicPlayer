@@ -1,6 +1,6 @@
 # 音频引擎与播放设置设计（AUDIO-ENGINE）
 
-> 状态：Draft v0.1 · 2026-09-12
+> 状态：v0.2 · 2026-09-12（并入 Q2/Q3/Q5/Q7 拍板与本机实测，见 §23 与 DECISION-Q1-HOST.md）
 > 范围：RhineLab-MusicPlayer 本机应用化的音频核心、播放设置与系统集成。
 > 借鉴：go-musicfox（无缝/频谱/任务栏歌词协议/配置系统）、btop4win / Taskbar-Lyrics（Windows 原生经验）。
 > 上游视觉与交互皮肤来自 RhineLabUI（MIT）；本文档只覆盖其不具备的"后端/系统"层。
@@ -58,7 +58,7 @@
 
 ---
 
-## 2. 宿主技术路线（待拍板 → 决策点 Q1）
+## 2. 宿主技术路线（待拍板 → 决策点 Q1；31 项属性拆解见 `DECISION-Q1-HOST.md`）
 
 音频核心语言三方案对比（以"独占位完美"为最高优先级评判）：
 
@@ -110,11 +110,15 @@ optional capability interfaces:
 
 ## 4. 解码层
 
-- **容器/编解码**（第一优先级按本地库实况，见 Q5）：FLAC（含嵌套 OGG）、WAV、AIFF、ALAC(m4a)、
-  MP3（含 LAME/iTunes 间隙元数据解析）、AAC/MP4、OGG（Vorbis/Opus）、WV/TTA 视库而定。
+- **容器/编解码**（按曲库实况定案，Q5 实测：FLAC 964 / MP3 152 / DSF 2 / 其他≈0）：
+  **v1 只需 FLAC + MP3 + WAV**；AAC/ALAC/OGG 留接口按需加。**DSD 出局**（Q3 定案，仅 2 个 DSF，
+  留 `formats.dsd=off` 占位，库存成规模再启动 DoP 专项）。MP3 含 LAME/iTunes 间隙元数据解析
+  （实测本库 MP3 无 gapless 标签 → 主走保守估计路径，见 §8）。
 - **统一中间格式**：`{interleaved | planar, i16 | i24(packed→i32) | f32, rate, channels}`；
-  解码器能力如实上报（如 symphonia FLAC 原生 i16/i24 → 整型直通保真；MP3 只能 float → 该路径永不
-  位完美，徽章如实显示，见 §13）。
+  解码器能力如实上报（FLAC 走整型直通保真——实测宿主栈 `MediaFoundationReader` 可直出 `24 bit PCM` 整型，
+  见 §23；MP3 只能 float → 该路径永不位完美，徽章如实显示，见 §13）。
+  **实现红线**：解码器默认路径若把 24bit 拉成 float32（如 NAudio `AudioFileReader`，实测发生），
+  位完美路径必须绕开它。
 - **元数据**：TagLib 级（标题/艺术家/专辑/年份/曲目号/封面/歌词字段/ReplayGain/LAME 头/iTunSMPB/
   cue 索引表）。专辑级封面缓存到应用数据目录（哈希寻址）。
 - **cue sheet**：解析后视为虚拟分轨（源文件 + 起止样本 + INDEX 修正），与整轨镜像同库异视图。
@@ -159,6 +163,9 @@ optional capability interfaces:
 - `[asio]`：v1 仅配置占位（§16 Q3）。
 - `[wasapi-push / apollo]`：保留枚举值，不实现。
 - `[dlna/mpd]`：musicfox 特色（投送输出），v2 再议（Q6）。
+- **缓冲与格式实测约束**（§23）：全设备 **float32 独占不支持** → 独占必走整型容器（i16/i24-in-i32）；
+  主力设备 minPeriod=3ms → 5/10/25ms 预设全部合法；虚拟设备（Steam 等）仅 16bit 独占、
+  蓝牙预期无独占 → 设备下拉必须渲染每设备能力三态标签（防误配）。
 
 ### 7.2 协商/降级链（每次打开设备与每次换曲复用）
 
@@ -175,9 +182,8 @@ optional capability interfaces:
   (源无播放中 ∧ 探测成功 ∧ 用户未锁定共享) → 播完当前曲的间隙静默升回, 或用户点"立即恢复"
 ```
 
-**独占模式的副作用明示**（设置页一次性说明 + 状态栏常驻角标）：
-系统全部其他声音静音；WebView UI 音效自动静音；检测到其他应用请求音频时按配置
-`release_on_conflict = pause-and-release | keep` 处理（利用独占被抢占会失败/断连的现象做被动检测 + `IAudioSessionNotification` 主动检测，两档实现深度见测试清单 T9）。
+**独占模式副作用的共存策略（Q7 定案 = keep）**：独占期间**其他应用由系统自行切换到其他输出设备**（或静音），
+本应用**不让位、不释放设备**；UI 常驻"独占中"角标 + 首次开启一次性说明。若外部抢占导致设备端报错，仍走 §7.2 被动降级链。`release_on_conflict` 键保留但默认且推荐 `keep`。
 
 ### 7.3 采样率切换（独占特有）
 
@@ -262,7 +268,15 @@ PWA/预览模式保留上游 `TerminalAudio`（三 stem BGM + 音效），仅作
 - 解析器移植 musicfox `lrc.go`/`yrc.go` 语义到 **前端 TS**（歌词是显示问题，留在 WebView）：
   LRC 基础 + 元标签、**YRC 逐字时间戳**、`AlignTranslationToYRC`/罗马音对齐、
   `offset_ms`、`skip_parse_err` 宽容模式、渲染风格 smooth/wave/glow 三态（映射到皮肤的滚动数字/解密动效语言）。
-- 来源优先级可配：内嵌标签 > 同名 sidecar（.lrc/.yrc，含歌词专属目录设置）>（若接在线源）API 匹配（Q2/Q7）。
+- 来源优先级（**按曲库实测定案，Q2=纯本地**）：内嵌 `LYRICS` 标签（实测覆盖 ~26%）> 同名 sidecar
+  （.lrc/.yrc，可配歌词目录，默认关——实测本库 0 个 sidecar）> 无歌词（仅显示元数据）；
+  **在线匹配出局**（Q2 定案，未来解禁再加）。
+- 解析增强（实测数据驱动的新需求，musicfox 无对应物）：
+  1. 站点水印行过滤（实测存在 `[by:鲜果微笑]` 形式首行）；
+  2. **行内双语拆句**：内嵌歌词常见 `雨上がりの虹も 雨过天晴的彩虹` 原文+译文同处一行，
+     需按字符脚本切换（假名/汉字/拉丁分区）行内拆双栅——与 musicfox `AlignTranslationToYRC`
+     （跨文件对齐）互补，属新算法；
+  3. cue 实测 0 个 → 整轨/cue 支持降为 v2（§4 设计保留，不排期）。
 
 ## 13. 位完美：两级徽章的严格定义
 
@@ -280,7 +294,7 @@ PWA/预览模式保留上游 `TerminalAudio`（三 stem BGM + 音效），仅作
 ## 14. 错误处理与诊断
 
 - 播放错误重试：`max_play_err_count`（musicfox 同名，默认 3，超限跳曲并在队列入黑名单位置标记）。
-- 网络类（若接在线源）：超时/中断沿用上游 `prepareMusic` 的 AbortController 模式原生化。
+- 网络类（Q2 定案纯本地后不存在）；本地文件错误（拔盘/占用）：跳曲计数 + 队列内标记。
 - 崩溃安全：状态文件+SQLite WAL；独占设备句柄异常退出由 OS 回收（无泄漏残留）。
 - 诊断页（设置内"高级"）：underrun/重开流/降级事件时间线、当前协商格式 vs 源格式对照、
   IPC 往返延迟直方图、环形日志导出。**这是发烧用户信任的来源，优先级不做可裁剪。**
@@ -415,16 +429,36 @@ T10 设备拔出/默认变更模拟；T11 gapless 长跑队列（1000 曲混合�
 
 ---
 
-## 22. 待拍板决策（阻塞后续里程碑）
+## 23. 本机环境实测（2026-09-12，证据存档）
 
-- **Q1 宿主路线**：A Tauri+Rust / B .NET10+WebView2+NAudio / C Go+webview（§2 表，倾向 B，理由见表格行"与本地资产协同"与"独占现成度"）。
-- **Q2 产品边界**：纯本地曲库？是否要接入网易云等在线源（musicfox 的 netease 层经验与账号/DRM 复杂度完全是另一个量级，建议 v1 纯本地）。
-- **Q3 ASIO / DSD**：v1 砍掉只留占位是否接受（有 PS1/DFF 库存需要则另议）。
-- **Q4 歌词显示面**：任务栏（借冻结协议白嫖 C++ 插件）✓；桌面歌词自绘窗 v2？还是任务栏都不要（先专注主窗歌词页）。
-- **Q5 曲库实况**：格式分布（FLAC 为主？有无 ALAC/WV/DSD）、数量级（决定 DB 与扫描并行度）、
-  歌词形态（内嵌/sidecar/无）、有无整轨+cue 专辑。
-- **Q6 DLNA/MPD 输出**：musicfox 有此玩法，本机应用要不要留想象空间。
-- **Q7 独占共存策略**：默认 `release_on_conflict=pause`（其他应用出声就让位）符合直觉吗？
-  还是发烧场景应该"死死咬住设备，别人闭嘴"（keep）？
-- **Q8 新仓库 license**：MIT 沿用？还是个人项目常见的 CC BY-NC 之类。
-- **Q9 音频硬件**：主力 DAC 与目标最高格式（384k/32bit？有 DSD？），影响硬件测试矩阵优先级。
+> 探测程序已收编：`tools/win-audio-probe/`（pwsh 一键重测任意设备能力矩阵）。
+> 完整分析见 `docs/DECISION-Q1-HOST.md` §6-§7。
+
+- **曲库**（Q5）：1116 文件 / 44GB；FLAC 964、MP3 152、DSF 2；FLAC ≈60% 是 48k/24bit Hi-Res，
+  含 192k/24、96k/24；MP3 无 gapless 标签；内嵌歌词 ~26%（LRC，含 `[by:]` 水印与行内双语），
+  无 sidecar/cue；1 个未解压 .rar（Hi-Res 专辑）。
+- **设备/独占矩阵**（Q9，NAudio 3.1.0 实探）：默认 = USB DAC CX31993 MAX97220PRO
+  （MixFormat float32@384kHz，**独占 16/24bit @ 44.1k–384k 全通过**，minPeriod 3ms）；
+  Realtek ALC256 内置（独占 16/24bit ≤192kHz）；Steam 虚拟设备（独占仅 16bit）；
+  **float32 独占全设备不支持** → §5 整型容器硬约束实锤；蓝牙耳机未连，A2DP 场景待补测。
+- **解码保真**：`MediaFoundationReader` 直出 `24 bit PCM` / `16 bit PCM` 整型 ✅；
+  `AudioFileReader` 统一降 float32 ❌（位完美路径红线，绕开之）。
+- **宿主环境**：WebView2 Runtime 152.0.4191.66 已装（安装包免带）；.NET SDK 10.0.400；
+  NuGet 缓存已含 WebView2/WinAppSDK 包；Win11 24H2 (26100)；代理 7897 可用。
+
+---
+
+## 24. 决策台账（v0.2）
+
+- **Q1 宿主路线**：⏳ **待定**。31 项属性拆解 + 加权小结 + B' 逃生通道独立成篇
+  `DECISION-Q1-HOST.md`（子问题：Q1-a 跨平台 / Q1-b Rust 熟练度 / Q1-c GC 容忍度 /
+  Q1-d 分发体积 / Q1-e UI 框架）。**唯一阻塞 M0 的决策**。
+- **Q2 产品边界**：✅ 定（09-12）——**纯本地曲库**，不接在线源。
+- **Q3 ASIO/DSD**：✅ 定——**v1 出局**，仅留占位；本地现有 2 个 DSF，库存成规模后启动 DoP 专项。
+- **Q4 歌词显示面**：⏳ 待答（不阻塞 M0-M4；决定 M5 范围：任务栏管道做否、桌面歌词窗排期）。
+- **Q5 曲库实况**：✅ 已实测（§23）——解码范围据此收敛为 FLAC/MP3/WAV。
+- **Q6 DLNA/MPD**：⏳ 待答（默认 v2 再说，不阻塞）。
+- **Q7 独占共存**：✅ 定——**keep**：独占时不让位不释放，其他应用自行切换输出设备；
+  仅当设备端报错才走 §7.2 被动降级链。
+- **Q8 新仓库 license**：⏳ 待答（发布前需要，不阻塞开发）。
+- **Q9 音频硬件**：✅ 已实测（§23）——USB DAC 独占至 384kHz/24bit 全绿；蓝牙场景待补测。
