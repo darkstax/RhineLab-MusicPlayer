@@ -1,4 +1,4 @@
-# IPC 协议契约 v1（壳 ↔ 音频核心 ↔ 前端桥）
+# IPC 协议契约 v1.1（壳 ↔ 音频核心 ↔ 前端桥）
 
 > 状态：v1.0 定稿 · 2026-09-12 · 配套 `AUDIO-ENGINE.md` §1/§10（D2 路线，见 `DECISION-Q1-HOST.md` §7.6）
 > 本文件是三方（WPF 壳、C++ 核心、TS 前端桥）的**唯一消息格式权威**；改协议必须改本文并升 `proto`。
@@ -52,6 +52,10 @@ WebView 前端 ──(WebView2 postMessage / WebMessageReceived)── WPF 壳 �
 {"v":1,"t":"hello","role":"shell","proto":1,"caps":["cmd","evt.position","evt.state","smtc"],"app":"rhine-music-player","ver":"0.1.0"}
 ```
 - 应答方回同构 `hello` 携带自身 `caps`。`proto` 双方取 `min`；`caps` 交集即本次会话能力。
+- **壳→前端的 hello 为聚合帧**（审查 P2-5 收编）：除自身 `role:"shell"` hello 字段外，
+  壳附加 `state`（ShellChannel 连接态）与 `core`（核心 hello 快照，未连接时为 null）两个
+  **本地扩展字段**。约定：扩展字段仅存在于壳↔前端链路，**永不进入壳↔核心管道帧**；
+  前端类型化读取（desktop-bridge `HelloResult`），核心实现（M2 的 C++）无需也不得感知。
 - **M0 打桩行为**：壳自答一份 stub `hello`（`caps:["echo"]`），并回 `ack` 任何 `t=cmd, cmd="echo"`——用于验证往返。
 - 3s 内未完成握手，双方视连接失败重试（指数退避，封顶 5s，musicfox 同源参数）。
 
@@ -62,11 +66,12 @@ M0-M6 增量启用；未实现的 cmd 必须回 `err{code:"not_implemented"}`，
 | cmd | payload 参数 | result | 里程碑 |
 |---|---|---|---|
 | `echo` | `data:any` | `{data}` 原样 | M0 |
-| `engine.state` | — | `{state,track_id,position_ms,...}`（§7 state 快照） | M1 |
-| `engine.play` | `{track_id, position_ms?}` | `{stream_token}` | M1 |
+| `engine.state` | — | `{state,track_id,position_ms,duration_ms,...}`（§7 state 快照） | M1 |
+| `engine.play` | `{track_id, duration_ms?=180000, position_ms?=0}` | `{stream_token}` | M1 |
 | `engine.pause` / `resume` / `stop` / `toggle` | — | `{state}` | M1 |
-| `engine.seek` | `{position_ms}` | `{applied_ms}` | M1 |
-| `engine.volume` | `{mode:fixed/hardware/integer/float, value?}` | `{effective}` | M1 |
+| `engine.seek` | `{position_ms}`（钳到 [0, duration_ms]） | `{applied_ms}` | M1 |
+| `engine.volume` | `{mode:fixed/hardware/integer/float, value?=0..1}` | `{effective:{mode,value}}` | M1 |
+| `config.set` 持久化 | 壳侧写 `%APPDATA%\RhineMusic\config.json`（dot-path 键；M2 起迁移 TOML schema，键名不变） | | M1 |
 | `engine.preload` / `cancel_preload` | `{track_id}` | `{accepted:bool, reason?}` | M2 |
 | `engine.queue` | `{items:[track_id...], head:int}` | `{queue_rev:int}` | M2 |
 | `devices.list` | — | `{devices:[{id,name,kind,default,exclusive:{rates:[{rate,bits...}],min_period_ms,mix_format}}]}` | M3 |
@@ -81,7 +86,7 @@ M0-M6 增量启用；未实现的 cmd 必须回 `err{code:"not_implemented"}`，
 
 | kind | 频率 | payload 摘要 |
 |---|---|---|
-| `state` | 变更即发 | `{state, track_id, duration_ms, negotiated, badges:{exclusive,bit_perfect,app_perfect,factors:[]}}` |
+| `state` | 变更即发 | `{state:idle/playing/paused/stopped, track_id?, position_ms?, duration_ms?, volume?, negotiated, badges:{exclusive,bit_perfect,app_perfect,factors:[]}}`（M1 桩允许 negotiated/badges 为 `null`=引擎未接入） |
 | `position` | 1Hz + 状态变更时 | `{position_ms, frames, rate, buffered_ms, drift_ms}` |
 | `transition` | 无缝切曲时 | `{old_id, new_id, at_frames, at_ms}` |
 | `spectrum` | 30Hz（可订阅开关 `spectrum.on/off`） | `{bands_l[64], bands_r[64], low, mid, high, activity, beat_phase}`（float 归一 0..1；上游 `MusicBands` 直接消费） |
@@ -137,3 +142,6 @@ M0-M6 增量启用；未实现的 cmd 必须回 `err{code:"not_implemented"}`，
 ## 11. 版本史
 
 - v1.0（2026-09-12）：M0 定稿——hello/cmd/ack/err/evt/bye + echo/state 最小集；其余 cmd 先占名后启用。
+- v1.1（2026-09-12，M1 前）：§4 收编壳聚合 hello（P2-5）；§5 M1 引擎命令参数定形（duration_ms、
+  volume.effective 对象化、config 持久化落点）；§6 state 事件补 idle/playing/paused/stopped 枚举与
+  M1 桩的 negotiated=null 豁免。帧语法与 v1.0 兼容，proto 仍为 1。
