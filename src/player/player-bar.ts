@@ -148,7 +148,16 @@ export function mountPlayerBar(root: HTMLElement): () => void {
   });
 
   const loadTrack = () => {
-    const id = idInput.value.trim();
+    let id = idInput.value.trim();
+    if (!id) {
+      // 降级接线（任务书 C4：archive 事件不可达 → 不侵入上游）：输入为空时读主界面
+      // 当前选中档案号，演示“档案即曲目”。#selected-id 内嵌 Rolling Number，
+      // textContent 会混入测量/动画节点，所以取“X-”前缀 + .rn-value 的数字部分。
+      const code = document.querySelector("#selected-id .rn-value")?.textContent?.trim();
+      id = code ? `X-${code}` : (document.getElementById("selected-id")?.textContent?.trim() ?? "");
+      if (id) idInput.value = id;
+    }
+
     if (id) void playerStore.play(id);
   };
   playBtn.addEventListener("click", loadTrack);

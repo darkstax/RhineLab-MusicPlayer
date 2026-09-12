@@ -70,7 +70,12 @@ public partial class MainWindow : Window
                 "RhineMusic", "webview2");
             Directory.CreateDirectory(userData);
 
-            var environment = await CoreWebView2Environment.CreateAsync(userDataFolder: userData);
+            // M1 验收钩子：CDP 只绑回环地址，供无人值守取证（m1-e2e）。0 = 不开启，行为不变。
+            var envOptions = _options.RemoteDebugPort > 0
+                ? new CoreWebView2EnvironmentOptions($"--remote-debugging-port={_options.RemoteDebugPort}")
+                : null;
+            var environment = await CoreWebView2Environment.CreateAsync(
+                browserExecutableFolder: null, userDataFolder: userData, options: envOptions);
             await _view.EnsureCoreWebView2Async(environment);
 
             var settings = _view.CoreWebView2.Settings;

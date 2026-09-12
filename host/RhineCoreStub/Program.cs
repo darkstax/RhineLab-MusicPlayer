@@ -103,12 +103,13 @@ internal static class Program
         {
             try
             {
-                var directory = Path.GetDirectoryName(Path.GetFullPath(tracePath));
+                var full = Path.GetFullPath(tracePath);
+                var directory = Path.GetDirectoryName(full);
                 if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
-                _trace = new StreamWriter(tracePath, append: false, new UTF8Encoding(false))
-                {
-                    AutoFlush = true,
-                };
+                // 追加 + FileShare.ReadWrite：验收场景会先后启动两个桩（重启验证持久化），
+                // 两份 trace 必须累积在同一个文件里互为证据。
+                var stream = new FileStream(full, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+                _trace = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
                 Log("info", $"trace -> {Path.GetFullPath(tracePath)}");
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

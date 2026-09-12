@@ -34,6 +34,13 @@ export type PlayerSnapshot = {
   framesLost: number;
 };
 
+/** E2E/诊断入口（与 bridge 的 __rhineBridge 同一思路：只暴露读接口，不暴露写接口）。 */
+declare global {
+  interface Window {
+    __rhinePlayer?: { snapshot(): PlayerSnapshot };
+  }
+}
+
 const DEFAULT_DURATION_MS = 180_000;
 const TICK_MS = 1000;
 
@@ -256,6 +263,9 @@ export class PlayerStore {
     try {
       if (this.snapshot.engine === "desktop" && bridge.desktop) {
         await desktop();
+        // ack 为准、事件为补：动作后回拉一次 engine.state 收敛。丢帧（如 --halt-events 窗口
+        // 吞掉命令补发帧）不能卡住 UI；多一次 10ms 往返可接受。
+        await this.refresh();
       } else {
         this.syncLocal(local());
       }
@@ -279,6 +289,8 @@ export class PlayerStore {
       return;
     }
 
+    // 先本地更新标签，不等 IPC 往返（选曲反馈立即性；真快照随后覆盖）。
+    this.emit({ trackId: id, trackLabel: `ARCHIVE ${id}` });
     await this.command(
       () => bridge.call("engine.play", { track_id: id, duration_ms: durationMs }),
       () => {
@@ -377,3 +389,8 @@ export class PlayerStore {
 }
 
 export const playerStore = new PlayerStore();
+
+// 诊断/E2E 入口：只暴露快照读（不暴露动作），验收脚本据此断言 UI 背后的真实状态。
+if (typeof window !== "undefined") {
+  window.__rhinePlayer = { snapshot: () => playerStore.state };
+}

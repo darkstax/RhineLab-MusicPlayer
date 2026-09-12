@@ -23,7 +23,6 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-Add-Type -AssemblyName System.Text.Json 2>$null
 
 function Write-Step([string]$Text) { Write-Host "`n=== $Text ===" -ForegroundColor Cyan }
 $script:failures = 0
@@ -44,12 +43,15 @@ $stubLog = Join-Path $LogDirectory 'm1-scenario-core.log'
 $stateFile = Join-Path ([System.IO.Path]::GetTempPath()) ("rhine-m1-stub-state-{0}.json" -f ([guid]::NewGuid().ToString('N')))
 Remove-Item -LiteralPath $traceFile, $stubLog, $stateFile -ErrorAction SilentlyContinue
 
-$pipeName = $Pipe -replace '^\\\\\?\\pipe\\', '' -replace '^\\\\\.\pipe\\', ''
+# 取管道名末段（NamedPipeClientStream 只需名称）；避免正则转义坑，用字符串操作。
+$pipeName = $Pipe.Substring($Pipe.LastIndexOf('\') + 1)
 
 function Start-Stub {
   $env:RHINE_STUB_STATE_FILE = $stateFile
+  # 每次启动独立的 stdout 日志（重启场景有两个桩生命周期，互相不覆盖证据）。
+  $log = $stubLog -replace '\.log$', ('-{0:d2}.log' -f (++$script:stubInstance))
   $p = Start-Process -FilePath $stubExe -ArgumentList @('--pipe', $Pipe, '--trace', $traceFile) `
-    -RedirectStandardOutput $stubLog -PassThru -WindowStyle Hidden
+    -RedirectStandardOutput $log -PassThru -WindowStyle Hidden
   Start-Sleep -Milliseconds 600
   if ($p.HasExited) { throw "stub exited immediately (code $($p.ExitCode)); see $stubLog" }
   return $p
@@ -65,10 +67,11 @@ function Connect-Core {
   $writer.WriteLine($hello)
   $line = $reader.ReadLine()
   if (-not $line) { throw 'no hello reply from core' }
-  return [pscustomobject]@{ Client = $client; Reader = $reader; Writer = $writer; Hello = ($line | ConvertFrom-Json) }
+  return [pscustomobject]@{ Client = $client; Reader = $reader; Writer = $writer; Hello = ($line | ConvertFrom-Json); ReadTask = $null }
 }
 
 $script:cmdSeq = 0
+$script:stubInstance = 0
 function Send-Cmd($conn, [string]$cmd, [string]$dataJson) {
   $script:cmdSeq++
   $id = "m1s-$script:cmdSeq"
@@ -82,10 +85,12 @@ function Send-Cmd($conn, [string]$cmd, [string]$dataJson) {
   return $id
 }
 
+# StreamReader 不允许并发多次 ReadLineAsync：保持一个在飞任务，超时返回后复用同一任务继续等。
 function Read-Frame($conn, [int]$timeoutMs = 2000) {
-  $task = $conn.Reader.ReadLineAsync()
-  if (-not $task.Wait($timeoutMs)) { return $null }
-  $line = $task.Result
+  if ($null -eq $conn.ReadTask) { $conn.ReadTask = $conn.Reader.ReadLineAsync() }
+  if (-not $conn.ReadTask.Wait($timeoutMs)) { return $null }
+  $line = $conn.ReadTask.Result
+  $conn.ReadTask = $null
   if ($null -eq $line) { return $null }
   return ($line | ConvertFrom-Json)
 }
@@ -95,7 +100,7 @@ function Wait-Ack($conn, [string]$id, [int]$timeoutSec = 8) {
   while ((Get-Date) -lt $deadline) {
     $frame = Read-Frame $conn 2000
     if ($null -eq $frame) { continue }
-    if ($frame.t -in @('ack', 'err') -and $frame.id -eq $id) { return $frame }
+    if (($frame.t -ceq 'ack' -or $frame.t -ceq 'err') -and $frame.id -eq $id) { return $frame }
     # 期间的事件帧忽略（由收集器另行处理）
   }
   throw "no ack/err for id=$id within ${timeoutSec}s"
@@ -106,7 +111,7 @@ function Collect-Evts($conn, [int]$seconds) {
   $deadline = (Get-Date).AddSeconds($seconds)
   while ((Get-Date) -lt $deadline) {
     $frame = Read-Frame $conn 1500
-    if ($frame -and $frame.t -eq 'evt') { $events += $frame }
+    if ($frame -and $frame.t -ceq 'evt') { $events += $frame }
   }
   return $events
 }
@@ -128,7 +133,7 @@ Assert ($ack.t -eq 'ack') "engine.play ack 成功（$($ack.t)）"
 Assert ($ack.result.stream_token -like 'fake-*') "stream_token=$($ack.result.stream_token)"
 
 $evts = Collect-Evts $conn 26
-$positions = @($evts | Where-Object { $_.evt -eq 'position' } | ForEach-Object { [long]$_.data.position_ms })
+$positions = @($evts | Where-Object { $_.evt -ceq 'position' } | ForEach-Object { [long]$_.data.position_ms })
 Assert ($positions.Count -ge 20) "1Hz position 帧数 = $($positions.Count)（要求 ≥20，26s 窗口）"
 $monotonic = $true
 for ($i = 1; $i -lt $positions.Count; $i++) { if ($positions[$i] -le $positions[$i-1]) { $monotonic = $false } }
@@ -145,25 +150,28 @@ $id = Send-Cmd $conn 'engine.pause' $null
 $ack = Wait-Ack $conn $id
 Assert ($ack.result.state -eq 'paused') 'pause → ack.state=paused'
 $evts = Collect-Evts $conn 4
-$positions = @($evts | Where-Object { $_.evt -eq 'position' } | ForEach-Object { [long]$_.data.position_ms })
-$frozen = $true
-if ($positions.Count -gt 0) { foreach ($p in $positions) { if ($p -ne $positions[0]) { $frozen = $false } } }
-Assert $frozen "暂停期间 position 冻结（$($positions.Count) 帧恒定 $($positions[0])ms）"
+$positions = @($evts | Where-Object { $_.evt -ceq 'position' } | ForEach-Object { [long]$_.data.position_ms })
+# 首帧可能是 pause 生效前在途的 tick（位置略小），从第二帧起必须恒定 = 冻结。
+$tail = @($positions | Select-Object -Skip 1)
+$frozen = $tail.Count -ge 2
+if ($frozen) { foreach ($p in $tail) { if ($p -ne $tail[0]) { $frozen = $false } } }
+Assert $frozen "暂停期间 position 冻结（尾 $($tail.Count) 帧恒定 $($tail[0])ms）"
 
 # ---------- 3) resume 续播 ----------
 $id = Send-Cmd $conn 'engine.resume' $null
 $ack = Wait-Ack $conn $id
 Assert ($ack.result.state -eq 'playing') 'resume → ack.state=playing'
 $evts = Collect-Evts $conn 3
-$positions = @($evts | Where-Object { $_.evt -eq 'position' } | ForEach-Object { [long]$_.data.position_ms })
-Assert ($positions.Count -ge 2 -and $positions[-1] -gt $positions[0]) "resume 后位置继续推进（$($positions[0]) → $($positions[-1])）"
+$positions = @($evts | Where-Object { $_.evt -ceq 'position' } | ForEach-Object { [long]$_.data.position_ms })
+$advance = ($positions.Count -ge 2 -and $positions[-1] -gt $positions[0])
+Assert $advance "resume 后位置继续推进（$($positions[0]) → $($positions[-1])）"
 
 # ---------- 4) seek 10s 跳变 ----------
 $id = Send-Cmd $conn 'engine.seek' '{"position_ms":10000}'
 $ack = Wait-Ack $conn $id
 Assert ([long]$ack.result.applied_ms -eq 10000) 'seek → ack.applied_ms=10000'
 $evts = Collect-Evts $conn 2
-$positions = @($evts | Where-Object { $_.evt -eq 'position' } | ForEach-Object { [long]$_.data.position_ms })
+$positions = @($evts | Where-Object { $_.evt -ceq 'position' } | ForEach-Object { [long]$_.data.position_ms })
 Assert ($positions.Count -ge 1 -and [math]::Abs($positions[0] - 10000) -le 2500) "seek 后 position 跳变到 ≈10000（实测 $($positions[0])ms）"
 
 # ---------- 5) volume 0.3 ack + 持久化（重启恢复） ----------
@@ -181,7 +189,7 @@ Assert ($null -eq $ack.result.badges) 'M1 豁免：badges=null'
 
 # ---------- 6) 播完自动 stopped（30s 曲 seek 到 10s，再等 ~20s） ----------
 $evts = Collect-Evts $conn 22
-$stopped = @($evts | Where-Object { $_.evt -eq 'state' -and $_.data.state -eq 'stopped' })
+$stopped = @($evts | Where-Object { $_.evt -ceq 'state' -and $_.data.state -eq 'stopped' })
 Assert ($stopped.Count -ge 1) "播完自动 evt{state:stopped} ×$($stopped.Count)"
 $id = Send-Cmd $conn 'engine.state' $null
 $ack = Wait-Ack $conn $id
@@ -196,7 +204,7 @@ $stub = Start-Stub
 $conn = Connect-Core
 $stateEvts = Collect-Evts $conn 2
 # 协议 §9：握手后桩立刻补发 state 快照。
-$restored = @($stateEvts | Where-Object { $_.evt -eq 'state' })
+$restored = @($stateEvts | Where-Object { $_.evt -ceq 'state' })
 Assert ($restored.Count -ge 1) '重启后握手补发 state 快照（§9）'
 Assert ($restored[-1].data.volume -eq 0.3) "重启后音量恢复 0.3（实测 $($restored[-1].data.volume)）"
 Assert ($conn.Hello.ep -eq 1) '新进程 ep 从 1 重新开始（进程内世代）'

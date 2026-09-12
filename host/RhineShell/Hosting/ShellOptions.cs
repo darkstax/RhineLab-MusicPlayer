@@ -32,8 +32,12 @@ public sealed class ShellOptions
     /// 供 UI 迭代免重编壳；无参数时行为不变。</summary>
     public bool Dev { get; init; }
 
+    /// <summary>M1 验收钩子：<c>--remote-debug-port &lt;port&gt;</c> 开启 WebView2 CDP（仅 127.0.0.1），
+    /// 供无人值守取证（keep_awake/丢帧检测）；长期保留为诊断能力（M6 诊断页同源）。</summary>
+    public int RemoteDebugPort { get; init; }
+
     public string Describe() =>
-        $"dist=\"{DistDirectory}\" pipe=\"{PipeName}\" coreDisabled={CoreDisabled} devtools={OpenDevTools} dev={Dev}";
+        $"dist=\"{DistDirectory}\" pipe=\"{PipeName}\" coreDisabled={CoreDisabled} devtools={OpenDevTools} dev={Dev} cdp={RemoteDebugPort}";
 
     public static ShellOptions FromCommandLine(string[] args)
     {
@@ -50,6 +54,9 @@ public sealed class ShellOptions
             OpenDevTools = args.Contains("--devtools"),
             SpawnedCoreOwned = args.Contains("--spawn-core"),
             Dev = args.Contains("--dev"),
+            RemoteDebugPort = int.TryParse(Value(args, "--remote-debug-port"), out var port) && port is > 0 and < 65536
+                ? port
+                : 0,
         };
     }
 
