@@ -68,14 +68,20 @@ public partial class MainWindow : Window
             var userData = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "RhineMusic", "webview2");
+            if (_options.RemoteDebugPort > 0)
+            {
+                // 审查 P1-4 根因（A/B/C 隔离实测）：Runtime 152 对 `--remote-debugging-port=ip:port`
+                // 形式**静默忽略**，纯端口形式生效（CDP 本就默认只绑 127.0.0.1，无损失）；
+                // 另：options.AdditionalBrowserArguments 通道在本机不生效（M1 实施发现，FINDINGS §1），
+                // 环境变量通道经实测可靠，在 CreateAsync 前写入即对所有浏览器子进程生效。
+                Environment.SetEnvironmentVariable(
+                    "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+                    $"--remote-debugging-port={_options.RemoteDebugPort}");
+            }
             Directory.CreateDirectory(userData);
 
-            // M1 验收钩子：CDP 只绑回环地址，供无人值守取证（m1-e2e）。0 = 不开启，行为不变。
-            var envOptions = _options.RemoteDebugPort > 0
-                ? new CoreWebView2EnvironmentOptions($"--remote-debugging-port={_options.RemoteDebugPort}")
-                : null;
             var environment = await CoreWebView2Environment.CreateAsync(
-                browserExecutableFolder: null, userDataFolder: userData, options: envOptions);
+                browserExecutableFolder: null, userDataFolder: userData, options: null);
             await _view.EnsureCoreWebView2Async(environment);
 
             var settings = _view.CoreWebView2.Settings;

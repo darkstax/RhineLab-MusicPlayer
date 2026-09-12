@@ -181,12 +181,13 @@ public sealed class FakeEngine
         return [StateEvent(), PositionEvent()];
     }
 
-    /// <summary>协议 §5 engine.toggle（语义照 musicfox Player.Toggle）：playing↔paused；idle/stopped 且有曲目=重播。</summary>
+    /// <summary>协议 §5 engine.toggle（语义照 musicfox Player.Toggle）：playing↔paused；idle/stopped 且有曲目=从头重播。
+    /// 审查 P1-1：重播**保留当前曲目时长**（不能退回 180s 缺省，否则曲终重播后进度/自动停止点失真）。</summary>
     public List<EngineEvent> Toggle() => State switch
     {
         PlayState.Playing => Pause(),
         PlayState.Paused => Resume(),
-        _ when TrackId is { } track => Play(track),
+        _ when TrackId is { } track => Play(track, DurationMs),
         _ => [StateEvent(), PositionEvent()],
     };
 

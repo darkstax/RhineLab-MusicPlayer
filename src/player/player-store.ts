@@ -157,6 +157,9 @@ export class PlayerStore {
         bridge.on("position", (frame) => this.acceptPosition(frame)),
         bridge.on("error", (frame) => this.acceptError(frame)),
       );
+      // 审查 P1-3：握手显式触发一次（hello.core.ep 透传通道入接收侧复位；
+      // 失败不阻断——后续事件/命令路径自带重连语义）。
+      bridge.handshake().catch(() => {});
     } else {
       this.startLocalTicker();
     }
@@ -179,6 +182,7 @@ export class PlayerStore {
 
   /** 协议 §6 state 事件 / engine.state 快照。 */
   private acceptState(frame: Frame) {
+    this.recoverFromLocal(); // 审查 P1-2：真事件恢复桌面引擎
     const data = (frame.data ?? {}) as Record<string, unknown>;
     const state = asPlayerState(data.state);
     if (state === null) return;
@@ -198,6 +202,7 @@ export class PlayerStore {
   }
 
   private acceptPosition(frame: Frame) {
+    this.recoverFromLocal(); // 审查 P1-2：同上，position 也是存活证明
     const data = (frame.data ?? {}) as Record<string, unknown>;
     this.emit({
       positionMs: asNumber(data.position_ms, this.snapshot.positionMs),
@@ -218,6 +223,21 @@ export class PlayerStore {
     if (!this.localTimer) this.startLocalTicker();
     if (this.errorTimer) clearTimeout(this.errorTimer);
     this.errorTimer = setTimeout(() => this.emit({ error: null }), 4200);
+  }
+
+  /**
+   * 审查 P1-2：降级不再是单程票——只要收到任何真引擎事件（state/position，含 engine.state
+   * 回拉应答），就复位 desktop 引擎并停掉本地 ticker；真事件天然压过假引擎。
+   * 否则一次瞬时故障（核心重启窗口期点击，retryable 超时）就把用户永久钉在 LOCAL 假引擎上，
+   * 后续所有操作静默失效。
+   */
+  private recoverFromLocal() {
+    if (!bridge.desktop || this.snapshot.engine === "desktop") return;
+    if (this.localTimer) {
+      clearInterval(this.localTimer);
+      this.localTimer = null;
+    }
+    this.emit({ engine: "desktop" });
   }
 
   private startLocalTicker() {

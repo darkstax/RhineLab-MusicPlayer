@@ -213,6 +213,23 @@ public class FakeEngineTests
         engine.Toggle();
         Assert.Equal(PlayState.Playing, engine.State);
         Assert.Equal(0L, engine.PositionMs);
+        Assert.Equal(60_000L, engine.DurationMs); // 审查 P1-1：重播保留原曲时长，不得退回 180s 缺省
+    }
+
+    [Fact]
+    public void Toggle_after_finished_replays_keeps_duration()
+    {
+        // 审查 P1-1 回归：曲终自动 stopped 后按 ▶ 重播——时长/进度/自动停止点全部失真曾在此触发。
+        var (engine, clock) = NewEngine();
+        engine.Play("A", 30_000);
+        clock.Advance(31_000); // 曲终收敛在桩的 1Hz Tick 里（同 Finish 测试套路）
+        engine.Tick();
+        Assert.Equal(PlayState.Stopped, engine.State);
+        engine.Toggle();
+        Assert.Equal(PlayState.Playing, engine.State);
+        Assert.Equal(30_000L, engine.DurationMs);
+        clock.Advance(29_000);
+        Assert.True(engine.PositionMs <= 30_000L); // 不会卡在 16.7% 永远“播不完”
     }
 
     // ---------- stop ----------

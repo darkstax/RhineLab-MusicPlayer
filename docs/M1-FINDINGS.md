@@ -36,6 +36,7 @@
 - **命令补发帧 + ack 后回拉双保险**：任务书 A2 的"立刻补发 position+state"会被 `--halt-events`
   吞掉；前端 store 在动作 ack 后主动 `engine.state` 回拉一次，保证 UI 在丢帧窗口内也即时收敛
   （事件仍是权威通路，回拉只是补偿）。实测 halt 窗口内 framesLost=340、UI 零卡顿。
+  ——审查 P1-5 更正：halt 窗口内补发帧被吞时，**ack 后回拉实为主收敛通路**，事件为常态权威；详见 §6。
 - **caps 只声明已实现集**（echo+engine.*）：`devices/output/diag` 不声明，调用回 `not_implemented`——
   §4 的 caps 交集语义与 §5 的"未实现必须回错"一致，避免"声明了却只回错"的自相矛盾。
 
@@ -68,3 +69,29 @@
 - `config.get/set` 的参数校验极小（只查 path 非空）：M2 迁 TOML schema 时补键名白名单与类型检查。
 - keep_awake 的 `ES_DISPLAY_REQUIRED` 在电池模式的系统策略下可能被组策略屏蔽——本机实测有效，
   M6 安装包文档需注明。
+
+## 6. 审查 P1 修复记录（主进程执行，2026-09-12 深夜）
+
+审查结论"修后复审"后的处置：
+
+- **P1-1 Toggle 丢时长**：`FakeEngine.Toggle` 重播改传 `Play(track, DurationMs)`；
+  补 2 项对拍单测（stopped 重播保时长 / 曲终 Tick→stopped 后 toggle 保时长），
+  `dotnet test` **34/34 绿**（WSL 直接可跑）。TS 侧 LocalEngine 本已正确，无需动。
+- **P1-2 fail 永久降级**：player-store 新增 `recoverFromLocal()`——acceptState/acceptPosition
+  （含 refresh 回拉构造帧）入口统一复位 desktop 并停本地 ticker；真事件恢复即接管。
+- **P1-3 握手死代码**：构造函数桌面分支 `bridge.handshake().catch(()=>{})`（hello.core.ep
+  透传通道接通接收侧复位；失败静默，事件路径自带重连）。
+- **P1-4 CDP 根因修正（重要，覆盖本文 §1 的归因）**：A/B/C 三组隔离实测——
+  父 env 纯端口=OK；代码内 `ip:port` 形式=FAIL；代码内纯端口=OK。
+  **真实根因是 Runtime 152 静默忽略 `--remote-debugging-port=127.0.0.1:9231` 这种带 IP 的写法**，
+  与 §1 推测的"profile 复用"无关（中途引入的 webview2-debug 独立目录已回退，保持单一 userData）。
+  修复：MainWindow 在 CreateAsync 前 `SetEnvironmentVariable(..., "--remote-debugging-port=<port>")`
+  （纯端口；CDP 本就默认绑 127.0.0.1，无暴露增量）。验证：镜像仓新 build 不带任何父 env 起壳
+  `--remote-debug-port 9261` → `/json/version` 返回 `Edg/152.0.4191.66`。
+  E2E 取证脚本已归档 `tools/m1-e2e/`（e2e.mjs / web-degrade.mjs / launch.ps1，
+  playwright-core 路径经 RHINE_PW_CORE 参数化）。
+- **P1-5 FINDINGS §2 措辞**：更正为"**ack 后的 engine.state 回拉是 halt 窗口内 UI 收敛的主通路**，
+  事件为常态权威；命令补发帧在 halt 期间被吞属预期（协议 §6 事件可丢）"。
+- **P2 表 15 项**：全部按信任边界纪律与 M2 排期备案，不修；其中 P2-6（壳侧 SafeString 统一）
+  并入 M2 壳任务。
+- 端到端回归：镜像仓 `m1-scenario full` **ALL PASS**（协议级 28 项 + trace 双证）。
