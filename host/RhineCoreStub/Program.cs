@@ -281,7 +281,10 @@ internal static class Program
         switch (type)
         {
             case "cmd":
-                await HandleCommand(frame, send).ConfigureAwait(false);
+                // 并发处理命令：**不能** 在读写循环里 `await HandleCommand`，否则 echo 的 1–8ms
+                // 人工延迟会把后续命令排成队（实测 p95 从十几毫秒涨到百毫秒级），
+                // 延迟直方图就量不到链路开销。写路径经 `WriteGate` 串行，ack 靠 `id` 路由，不依赖到达顺序。
+                _ = RunCommandAsync(frame, send);
                 break;
             case "bye":
                 Log("info", $"bye reason={Str(frame, "reason") ?? "(none)"}");
@@ -295,6 +298,27 @@ internal static class Program
         }
 
         return SessionOutcome.Closed;
+    }
+
+    /// <summary>后台执行一条命令；异常不得顶掉会话读循环。</summary>
+    private static async Task RunCommandAsync(JsonObject frame, PipeSink send)
+    {
+        try
+        {
+            await HandleCommand(frame, send).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // session ending
+        }
+        catch (IOException ex)
+        {
+            Log("warn", $"cmd write failed: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            Log("error", $"cmd handler faulted: {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     private static async Task HandleCommand(JsonObject frame, PipeSink send)
