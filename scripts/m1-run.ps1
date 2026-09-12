@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
   M1 运行与无人值守验收：拉起核心桩（后台，带 --trace 落盘）+ WPF 壳（前台），
-  日志落 %LOCALAPPDATA%\RhineMusic\logs\。M0 的 -SelfCheckDump 面板取证链已随自检面板退役。
+  日志落 %LOCALAPPDATA%\RhineMusic\logs\。M0 的面板取证链已随自检面板一并退役。
 
 .DESCRIPTION
   先运行 scripts/m-build.ps1 产出 dist-host\ 与 dist\。然后：
