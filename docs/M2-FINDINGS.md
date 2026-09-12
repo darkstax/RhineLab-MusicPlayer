@@ -76,14 +76,10 @@
    VBR 无 seek 表）如实报 0，seek 不封顶、曲终由 EOF 排空收敛，并把实际位置回填 duration（UI 终态一致）。
 4. **曲终双路**：`position ≥ duration`（时钟路，桩同款）∨ `EofDrained()`（解码 EOF + ring 排空，
    真音频新增）任一成立即收敛 stopped。
-5. **volume 模式裁定 ⚖**：任务书约束 5 字面为「float 实现；fixed/hardware/integer 回
-   not_implemented」。实施采**桩兼容优先**：fixed=1.0 直通（桩语义，M1 前端已依赖）、
-   float=软件增益（真效果）、hardware=端点会话音量路（`ma_device_set_master_volume`，
-   WASAPI per-app，非系统主音量；失败回退软件路）、仅 integer（定点位完美衰减，M4 独占域）
-   回 not_implemented。理由：`engine.volume` 是 M1 已定形命令且桩对四 mode 全 ack，真核心对
-   fixed/hardware 突然 not_implemented 会造成前端行为分裂；四 mode 的诚实事实由 factors
-   明列（float-volume / hardware-volume）。**若 reviewer 按任务书字面裁定，回退为三 mode
-   not_implemented 是一行改动**（`Engine::SetVolume` 开头守卫）。
+5. **volume 模式裁定 ⚖ → 主进程定案（09-13）：采桩兼容方案，不回退任务书字面**。理由：
+   前端 M1 已依赖四 mode 全 ack 行为，真核心突然 not_implemented 会造成接入断裂；
+   fidelity factors 已如实标注（float-volume/hardware-volume），诚实性约束（§4 红线）满足；
+   integer 属 M4 定点域，拒得对。任务书约束 5 字面作废，以本节为准。
 6. **engine.preload / cancel_preload / queue 回 not_implemented**：§5 标 M2，但用户裁定
    gapless/预加载边界队列拆入 M2b（队列结构已立对，见 §7.2）；§5 纪律「未实现的 cmd 必须
    回 not_implemented，不得静默丢弃」满足。
