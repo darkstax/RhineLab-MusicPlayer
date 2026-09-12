@@ -30,3 +30,4 @@ public/fonts/novecento/
 host/**/bin/
 host/**/obj/
 dist-host/
+host/core/build/
