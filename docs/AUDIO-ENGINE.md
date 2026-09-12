@@ -75,9 +75,25 @@
 | 与本地资产协同 | 中 | **高**：sysmon-cmdpal(broker 经验)、Taskbar-Lyrics(C++)、btop4win 同生态 | 高（musicfox 本体） |
 | 跨平台余量 | Win/mac/Linux | 仅 Windows（本项目实际目标） | Win/mac/Linux |
 
-**主进程意见**：若目标锁定 Windows + 发烧播放，**B（.NET 10 + WebView2 + NAudio）胶水层最薄、
-与用户现有工具链同构**；A 工程质量上限更高但所有原生能力要手搓；C 唯一能白嫖 musicfox 代码，
-但恰好在最难的部分（独占）最弱。文档其余章节按语言无关的接口契约书写，选型不影响主体设计。
+**已定案：D2 = 共享 C++ 音频核心（miniaudio）+ 各平台异构薄壳**（详见 `DECISION-Q1-HOST.md` §7.5-§7.6/§9）。
+
+裁定过程：第一轮倾向 B（.NET 独占最省力）→ 第二轮用户答 Q1-a **Linux 需求真实** 且 Q1-b **Rust 出局**
+（AI 全保不可接受），且 Wine 跑 WebView2 经查证**不可维护**（installer 装不上、winetricks 至今无 verb）
+→ B 的 Windows-only 短板被激活，A 被否决 ⇒ 核心必须跨平台、壳允许异构：
+
+| 层 | 选型 | 理由 |
+|---|---|---|
+| **音频核心** | **C++ + miniaudio**（单文件 C，public domain，~6k 行核心 surface） | WASAPI **独占后端官方支持**；ALSA 后端可直设 `S32_LE`/rate/period（Linux 位完美的实测正确姿势）；内建 `ma_decoder`（dr_flac **整数解码**、dr_mp3、dr_wav）→ 解码不再平台特定；`i24-in-i32` 与 Linux `S32_LE` **两平台位完美语义天然统一** |
+| **Windows 壳** | **.NET 10 + WPF + WebView2**（框架依赖分发，Q1-d） | 用户可读/可审（Q1-b 精神）；WebView2 152 已装；NAudio **降级为设备枚举 + 每应用音量/会话诊断工具**（不再承载独占）；SMTC/托盘/安装器全在托管侧 |
+| **Linux 壳**（v2） | C++ GTK4+WebKitGTK，或 Go 薄壳 | musicfox `internal/webkitgtk`（purego dlopen、4.1/6.0 双栈降级）已趟过同一条路，可参照；MPRIS/dbus 接管媒体键 |
+| 前端 TS | 三平台零改动（Vite 产物直嵌） | — |
+| IPC | 命名管道(Windows) / Unix socket，JSON Lines | 沿用 musicfox 任务栏管道同源模式 |
+
+**underrun 对策（Q1-c 定案）**：主路径 = **缓冲自动升档**（设备最小值 → … → 25 → **300ms 封顶**，
+可配置上限并允许用户锁定）；渲染线程本就是 C++（D2 下该风险自动消除）。
+**风险登记**：C++ 核心由 AI 全保（用户可读不可写）——以 Taskbar-Lyrics 已验证模式对冲：
+极小 C ABI 边界 + musicfox T1-T7 单测直译为对拍基准。miniaudio 的 s24-packed vs i24-in-i32 需 M2 实测确认
+（不行则核心内自填 4 字节容器，数十行量级）。
 
 ---
 
@@ -114,11 +130,13 @@ optional capability interfaces:
   **v1 只需 FLAC + MP3 + WAV**；AAC/ALAC/OGG 留接口按需加。**DSD 出局**（Q3 定案，仅 2 个 DSF，
   留 `formats.dsd=off` 占位，库存成规模再启动 DoP 专项）。MP3 含 LAME/iTunes 间隙元数据解析
   （实测本库 MP3 无 gapless 标签 → 主走保守估计路径，见 §8）。
-- **统一中间格式**：`{interleaved | planar, i16 | i24(packed→i32) | f32, rate, channels}`；
-  解码器能力如实上报（FLAC 走整型直通保真——实测宿主栈 `MediaFoundationReader` 可直出 `24 bit PCM` 整型，
-  见 §23；MP3 只能 float → 该路径永不位完美，徽章如实显示，见 §13）。
-  **实现红线**：解码器默认路径若把 24bit 拉成 float32（如 NAudio `AudioFileReader`，实测发生），
-  位完美路径必须绕开它。
+- **解码器（D2 定案）**：`ma_decoder`（dr_flac / dr_mp3 / dr_wav）在核心层统一跨平台。
+  FLAC **解码全程整数运算** → i16/i24 原生整型直通（24bit→i32 容器）；MP3 本质只能 float →
+  该路径永不位完美，徽章如实显示（§13）。
+- **统一中间格式**：`{interleaved, i16 | i24-in-i32 | f32, rate, channels}`；解码能力如实上报。
+  **实现红线**（历史教训，仍有效）：任何"便利入口"都可能偷偷把 24bit 拉成 float32——
+  实测 NAudio `AudioFileReader` 即如此（§23）；选定解码路径后必须**断言输出容器为整型**，
+  不得依赖默认行为。
 - **元数据**：TagLib 级（标题/艺术家/专辑/年份/曲目号/封面/歌词字段/ReplayGain/LAME 头/iTunSMPB/
   cue 索引表）。专辑级封面缓存到应用数据目录（哈希寻址）。
 - **cue sheet**：解析后视为虚拟分轨（源文件 + 起止样本 + INDEX 修正），与整轨镜像同库异视图。
@@ -162,9 +180,13 @@ optional capability interfaces:
   协商原生格式（rate/bit-exact 容器宽度，支持 i16/i24(i32 容器)/f32 按设备能力）。
 - `[asio]`：v1 仅配置占位（§16 Q3）。
 - `[wasapi-push / apollo]`：保留枚举值，不实现。
+- `alsa-direct`（Linux 壳，v2）：`S32_LE` + 显式 rate/period_size，绕过 PipeWire 混音器；
+  **Linux 位完美真相说明**（实测资料）：PipeWire 通用路径会把容器拉到 32bit 并做协商，
+  需 `default.clock.allowed-rates` 或 Pro Audio profile 才不断流——核心按能力探测处理，徽章语义与 Win 一致
+  （i24 装在 i32 容器里不算污染）。
 - `[dlna/mpd]`：musicfox 特色（投送输出），v2 再议（Q6）。
 - **缓冲与格式实测约束**（§23）：全设备 **float32 独占不支持** → 独占必走整型容器（i16/i24-in-i32）；
-  主力设备 minPeriod=3ms → 5/10/25ms 预设全部合法；虚拟设备（Steam 等）仅 16bit 独占、
+  主力设备 minPeriod=3ms → 5/10/25ms 预设全部合法，**underrun 自动升档封顶 300ms**（Q1-c）；虚拟设备（Steam 等）仅 16bit 独占、
   蓝牙预期无独占 → 设备下拉必须渲染每设备能力三态标签（防误配）。
 
 ### 7.2 协商/降级链（每次打开设备与每次换曲复用）
@@ -199,10 +221,14 @@ optional capability interfaces:
 - 手动切设备：暂停→关旧流→开新流→恢复+对齐进度。
 设备下拉项标注每个设备的**独占能力与格式矩阵**（启动时 `IsFormatSupported` 批量探测缓存）。
 
-### 7.5 underrun 处理
+### 7.5 underrun 处理（Q1-c 定案：缓冲自动升档为主对策）
 
 事件循环优先级：设备事件 > 解码队列 > UI。队列空时输出静音并计数，
-`recover_gapless`：补上后从断点样本续（无缝流内），不重启设备。诊断面板暴露计数（§14）。
+`recover_gapless`：补上后从断点样本续（无缝流内），不重启设备。
+**升档机制**：滑动窗口内 underrun ≥N 次 → period/buffer 自动提升一档
+（设备 min → 5 → 10 → 25 → 50 → 100 → **300ms 封顶**），写入降级事件时间线并 UI 明示
+"已放宽缓冲至 Xms（爆音保护）"；`auto_expand_buffer=false` / `buffer_max_ms` 供用户锁定；
+D2 下渲染线程零 GC（C++ 核心），升档主要针对 IO/解码饥饿类 underrun。诊断面板暴露计数（§14）。
 
 ---
 
@@ -313,9 +339,11 @@ schema = 1
 device = "default"        # 或 endpoint id
 mode = "auto"             # auto|shared|exclusive
 fallback_order = ["exclusive", "shared-event"]
-buffer_ms = 10            # 5|10|25|custom(≥设备最小)
+buffer_ms = 10            # 5|10|25|custom(≥设备最小; 本机实测 minPeriod=3ms)
+auto_expand_buffer = true # underrun 自动升档（Q1-c 主对策）
+buffer_max_ms = 300       # 升档天花板（用户经验值，Q1-c）
 on_device_gone = "follow-default"   # pause|follow-default
-release_on_conflict = "pause"       # keep|pause
+release_on_conflict = "keep"        # keep|pause（Q7 定案 keep：独占不让位，其他应用自行切设备）
 [quality]
 volume_mode = "hardware"  # fixed|hardware|integer|float
 resample = "off"          # off|auto|force; force 时:
@@ -389,13 +417,17 @@ user_state(收藏/历史, 迁移上游 localStorage rhine-saved → DB, 一次�
 
 | # | 里程碑 | 验收（全部要证据） |
 |---|---|---|
-| M0 | 壳与皮肤进窗口（路线定后） | Vite 工程原样渲染，SSAO 帧率基线报告 |
-| M1 | 状态机+双引擎骨架+Web 兜底 | UI 全链路（播放/暂停/seek/音量/设置持久化）走通 |
-| M2 | 原生共享后端 + 解码 + gapless | musicfox 对拍：同批 MP3/FLAC 边界样本一致；无缝实测 |
+| M0 | 壳与皮肤进窗口（**D2**：.NET10+WPF+WebView2 壳 + 核心 C ABI 打桩） | Vite 工程原样渲染，SSAO 帧率基线；IPC ping 往返通 |
+| M1 | 状态机 + 双引擎骨架 + Web 兜底 | UI 全链路（播放/暂停/seek/音量/设置持久化）走通 |
+| M2 | **核心：ma_decoder 解码 + miniaudio 共享输出 + gapless**（含 s24 容器实测） | musicfox 对拍：同批 MP3/FLAC 边界样本一致；无缝实测；断言 24bit 输出整型 |
 | M3 | 频谱 tap + 律动 + SMTC | 64 带 L/R 事件 30Hz；系统媒体卡控制闭环 |
-| M4 | **独占 + 协商状态机 + 降级链 + 热插拔** | §19 硬件测试矩阵全绿；underrun=0 长跑 2h |
-| M5 | 曲库/watcher/SQLite + 歌词(lrc/yrc) + 任务栏协议 | 1 万曲库可用；Taskbar-Lyrics 显示歌词实测 |
-| M6 | 设置三层 UI + 信号路径图 + 诊断页 + NSIS 打包/updater | 发烧预设一键到位，徽章与 FidelityAssessor 一致 |
+| M4 | **独占 + 协商状态机 + 降级链 + 300ms 自动升档 + 热插拔** | §19 硬件矩阵全绿；underrun=0 长跑 2h（含升档实测） |
+| M5 | 曲库/watcher/SQLite + 歌词(lrc/yrc + 行内双语拆句) + 任务栏协议 | 44GB 库可用；Taskbar-Lyrics 显示歌词实测 |
+| M6 | 设置三层 UI + 信号路径图 + 诊断页 + 安装包（框架依赖 ~5MB）/updater | 发烧预设一键到位，徽章与 FidelityAssessor 一致 |
+| **M7** | **Linux 壳**（GTK4+WebKitGTK 或 Go 薄壳 + ALSA direct + MPRIS），核心零改动 | 同一对拍单测集绿；目标机 PipeWire 位完美实测 |
+
+> M7 与 M0-M6 的时序（并行 vs Win 先行）= 新决策 Q1-g（§24）；接口从 M2 起按平台无关写
+> （miniaudio 本身平台无关，C ABI 边界即 D2 防漂移护栏）。
 
 ## 19. 测试策略
 
@@ -424,8 +456,9 @@ T10 设备拔出/默认变更模拟；T11 gapless 长跑队列（1000 曲混合�
 ## 21. 许可证备忘
 
 上游 MIT（保留版权头即可，含分发）。若选 C 路线嵌 mpv → GPL 传染随二进制分发；
-选 A/B 自研核心则依赖均为 MIT/Apache/LGPL-可兼容，**GitHub 开源发布无障碍**。
-新仓库 license 待定（Q8）。
+D2 依赖树核查：miniaudio 与 dr_flac/dr_mp3/dr_wav = **public domain（unlicense/MIT 双许可可选）**、
+WebView2 SDK/NAudio/TagLib# = BSD-3/MIT、.NET 运行时 = MIT —— **全部宽松无 GPL 传染，GitHub 开源发布无障碍**
+（早期"嵌 mpv → GPL"分支随 C 方案出局而失效）。新仓库 license 待定（Q8）。
 
 ---
 
@@ -441,8 +474,11 @@ T10 设备拔出/默认变更模拟；T11 gapless 长跑队列（1000 曲混合�
   （MixFormat float32@384kHz，**独占 16/24bit @ 44.1k–384k 全通过**，minPeriod 3ms）；
   Realtek ALC256 内置（独占 16/24bit ≤192kHz）；Steam 虚拟设备（独占仅 16bit）；
   **float32 独占全设备不支持** → §5 整型容器硬约束实锤；蓝牙耳机未连，A2DP 场景待补测。
-- **解码保真**：`MediaFoundationReader` 直出 `24 bit PCM` / `16 bit PCM` 整型 ✅；
-  `AudioFileReader` 统一降 float32 ❌（位完美路径红线，绕开之）。
+- **解码保真**（当时按 B 路线测）：`MediaFoundationReader` 直出 `24 bit PCM` / `16 bit PCM` 整型 ✅；
+  `AudioFileReader` 统一降 float32 ❌ → 该教训泛化为 §4 实现红线（D2 下解码改用 ma_decoder 整数路径，不再依赖 MF）。
+- **跨平台事实核查**（Q1-a/D2 依据）：WebView2 无法在 Wine 维护（installer 失败、winetricks 无 verb）；
+  miniaudio WASAPI 后端支持独占（CoreAudio 后端**不**支持，选对后端是关键）；Linux 位完美 = ALSA direct S32_LE
+  或 PipeWire allowed-rates/Pro Audio profile；S32_LE == i24-in-i32 容器语义两平台一致。
 - **宿主环境**：WebView2 Runtime 152.0.4191.66 已装（安装包免带）；.NET SDK 10.0.400；
   NuGet 缓存已含 WebView2/WinAppSDK 包；Win11 24H2 (26100)；代理 7897 可用。
 
@@ -450,9 +486,12 @@ T10 设备拔出/默认变更模拟；T11 gapless 长跑队列（1000 曲混合�
 
 ## 24. 决策台账（v0.2）
 
-- **Q1 宿主路线**：⏳ **待定**。31 项属性拆解 + 加权小结 + B' 逃生通道独立成篇
-  `DECISION-Q1-HOST.md`（子问题：Q1-a 跨平台 / Q1-b Rust 熟练度 / Q1-c GC 容忍度 /
-  Q1-d 分发体积 / Q1-e UI 框架）。**唯一阻塞 M0 的决策**。
+- **Q1 宿主路线**：⚙ **已收敛到 D2，待你盖章（Q1-f）**。演化链：初推 B(.NET 纯托管) →
+  你裁定 Linux 真实（Q1-a）+ Rust 出局（Q1-b）+ Wine 不可维护（实测：WebView2 装不进 Wine）
+  ⇒ **D2 = C++/miniaudio 共享音频核心 + Win 壳 .NET10/WPF/WebView2（Q1-e）+ 框架依赖分发（Q1-d）
+  + underrun 主对策=缓冲升档至 300ms（Q1-c）**。细则 `DECISION-Q1-HOST.md` §7.5-§7.6/§9。
+  - **Q1-g（新，唯一剩余阻塞）**：Linux 壳（M7）与 Windows 版**同期并行，还是 Win 先交付、Linux 跟进？**
+    并请告知目标 Linux 环境（发行版/DE/PipeWire——可直接沿用你跑 musicfox 那台当默认假设）。
 - **Q2 产品边界**：✅ 定（09-12）——**纯本地曲库**，不接在线源。
 - **Q3 ASIO/DSD**：✅ 定——**v1 出局**，仅留占位；本地现有 2 个 DSF，库存成规模后启动 DoP 专项。
 - **Q4 歌词显示面**：⏳ 待答（不阻塞 M0-M4；决定 M5 范围：任务栏管道做否、桌面歌词窗排期）。

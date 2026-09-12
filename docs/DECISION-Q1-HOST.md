@@ -1,7 +1,7 @@
 # Q1 宿主路线：属性优劣拆解（决策支撑文档）
 
-> 状态：待用户拍板 · 2026-09-12
-> 配套：`AUDIO-ENGINE.md` §2（三方案概要）。本文把各方案**按属性逐条拆开**，每条含事实与代价。
+> 状态：v0.2 · 2026-09-12（Q1-a~e 已裁定，收敛到 D2，余 Q1-f 盖章 + Q1-g 时序）
+> 配套：`AUDIO-ENGINE.md` §2（选型结论）。本文保留三方案原始属性拆解作为决策存档，§7.5 起为第二轮裁定与 D2 修订。
 > 已并入本机实测证据（§6）：曲库实况、音频设备独占能力矩阵、NAudio 解码保真验证。
 
 ---
@@ -195,23 +195,105 @@
 
 ---
 
-## 8. 需要你确认的问题（Q1 专用）
+## 7.5 第二轮裁定（2026-09-12 用户答复，本轮定稿依据）
 
-- **Q1-a 跨平台期权**：未来 12 个月内有没有 mac/Linux 版需求？
-  （有 → A；无 → B，这是唯一能翻盘的属性）
-- **Q1-b Rust 熟练度**：你/愿意让 AI 主力写 Rust 吗？B 路线的"AI 一次通过率高"是实测过的（本会话）。
-- **Q1-c GC 容忍度**：如果纯 C# 方案在 T11 长跑中出现 underrun（概率低但非零），
-  你接受 (i) 放宽独占缓冲到 25ms、(ii) 下沉 C++ 渲染线程（§5 B'）、还是 (iii) 直接改投 A？
-- **Q1-d 体积偏好**：自包含 ~70MB vs 框架依赖 5MB+要求装 .NET 10 Desktop Runtime——你自己机器已装 SDK 无所谓，但发布给别人时选哪个？
-- **Q1-e 宿主 UI 框架**（若定 B）：WPF + WebView2（成熟、我推荐）/ WinForms + WebView2（最轻）/ WinUI3（最现代但 WindowsAppSDK 依赖链最重）。
+- **Q1-a 答复**：**Linux 需求真实存在**；Wine 路线由实测证据裁决。
+- **Q1-b 答复**：**Rust 出局**（"我没学过，维护 = AI 全权"）——用户可读性优先于库现代性。
+  A 方案否决；同时该原则约束一切新代码：语言必须是用户能读/能审的（C# / Go / C++-参考 Taskbar-Lyrics 模式）。
+- **Q1-c 答复**：underrun 第一对策 = **放宽缓冲**（"传统艺能，300ms 一般就够了"）
+  → 写进 §7.5 降级链：underrun 计数触发时自动升档 5→10→25→…→300ms（用户可锁定上限），
+  C++/C# 渲染线程下沉为**最后手段**而非默认焦虑项。
+- **Q1-d 答复**：**框架依赖分发**（"用户凭什么不能装 .NET 10"）→ 安装包 ~5MB，README 给 runtime 链接。
+- **Q1-e**：授权主进程定 → **WPF + WebView2**（理由：无边框自定义窗口/透明/DPI 混排是播放器的刚需场景，
+  WPF 生态对此最成熟；WinForms 太素、WinUI3 拖 WindowsAppSDK 全家桶）。
+
+### Wine 可维护性判决（Q1-a 附带问题，证据链）
+1. WebView2 Runtime **装不进 Wine**：官方 installer 在 Wine 下挂死/失败（WineHQ 论坛、Arch 论坛 2023 起
+   至今同案，[SOLVED] 帖的解法也是绕开而非修好）；winetricks **至今没有** webview2 verb
+   （winetricks issue #2226 保持未实现状态）。
+2. 侥幸装上的场景（Bottles/Proton GE + 特定依赖 + msedgewebview2.exe 设 Win7 兼容模式）社区报告
+   **渲染坏/随机崩**，属逐 app 调教的灰色地带——**不满足"可维护"定义，判出局**。
+3. 结论：Linux 需求 ⇒ 必须真 native 构建，B 的"Windows-only"短板被激活 → 触发下面的方案修订。
 
 ---
 
-## 9. 主进程推荐（供参考，你拍板）
+## 7.6 修订推荐：D2 = 薄平台壳 + 共享 C++ 音频核心（miniaudio）+ 零改动前端
 
-**B（.NET 10 + WebView2 + WPF）+ §5 的 B' 逃生通道 + C 的算法参照。**
+> 产生原因：Q1-a 要求 Linux 真实可行 + Q1-b 否决 Rust ⇒ "核心必须跨平台，壳允许各平台异构"。
+> miniaudio 实测背书：单文件 C（public domain，mackron 2018-2026 活跃）、**WASAPI 后端支持独占**
+> （官方手册确认；CoreAudio 后端不支持独占一事恰说明必须选对后端——miniaudio 的 WASAPI/ALSA 是正解），
+> ALSA 后端可直设 S32_LE/rate/period —— 正是 Linux bit-perfect 的实测正确姿势
+> （Arch 社区结论：PipeWire 通用路径强制 S32 容器 + allowed-rates 协商；真旁路 = ALSA direct 或 Pro Audio profile，
+> 而 S32_LE 容器恰好 == Windows 的 i24-in-i32，**两平台位完美定义天然统一**）。
+> 解码侧 miniaudio 内建 ma_decoder（dr_wav/dr_flac/dr_mp3）：FLAC 整数解码原生（24bit→s24/s32 容器，
+> 解码器全程整数运算）——**§6.3 的 MediaFoundation 红线随之下线**，解码不再平台特定。
 
-理由：P0 两项（独占确定性、既有资产协同）B 直接胜出且已被本会话实测背书
-（NAudio 能力探测跑通、24bit PCM 整型解码拿到、WebView2/DotNet SDK/依赖缓存全在位）；
-而 C 的最大卖点（musicfox 代码复用）在**最难的那块（独占）恰好无用**，可只借其**算法与测试用例**（不移植代码）；
-A 唯一压倒性优势（跨平台 + 无 GC）在本项目实际约束下权重最低（曲库 44GB 躺在 NTFS 上）。
+```
+                    ┌──────────────────────────────┐
+   前端 TS (Vite)   │ 皮肤/播放器 UI/歌词/频谱动画 │  ← 三平台零改动
+                    └──────┬───────────────────────┘
+              IPC(命名管道/Unix socket, JSON Lines)
+   ┌──────────────────┐  ┌──────────────────────────────┐
+   │ Win 壳: .NET10/WPF│  │ Linux 壳 v2: C++ GTK4+WebKitGTK│
+   │ WebView2 宿主     │  │ (或 .NET+webkit dlopen 试验田, │
+   │ 设备枚举(NAudio)  │  │  1-2k 行薄壳,核心零改动)       │
+   │ SMTC/托盘/安装器  │  │ MPRIS/dbus 集成               │
+   └────────┬─────────┘  └───────────┬──────────────────┘
+            │  C ABI (P/Invoke)      │  C ABI (直接链接)
+   ┌────────▼────────────────────────▼──────────┐
+   │ 共享音频核心 C++ (~6k 行, 唯一维护面)        │
+   │ miniaudio(输出/独占协商/降级链/设备监听)      │
+   │ ma_decoder(FLAC/MP3/WAV 整数直通)           │
+   │ 处理图(§5) · gapless(§8 算法移植) ·          │
+   │ 频谱 tap(§10, musicfox 算法参照重写) ·       │
+   │ FidelityAssessor(§13) · 诊断计数(§14)        │
+   └─────────────────────────────────────────────┘
+```
+
+**为什么不是其他跨平台组合**
+- C（Go 整体）：复用 musicfox 面最大，但主 UI webview 壳（13thgoutham/go-webview2）质量一般，
+  且 Go 的音频核心还是得 CGO→miniaudio——**共享核心的诉求把 Go 和 C# 拉平后，Windows 侧体验 C# 更好**
+  （WPF 窗口控制/Taskbar-Lyrics 同生态）；Go 版可作 Linux 壳的备选实现。
+- 全 C++：核心+壳一锅端，用户可读面归零（Taskbar-Lyrics 那种"AI 全保"模式 ×3 平台），违反 Q1-b 精神。
+- .NET 全家桶跨平台（Avalonia/WebView.MAUI/gir 绑 WebKitGTK）：Linux 侧 webview 绑定生态不成熟，
+  等于拿 P0 的不确定性换单一语言幻觉。
+
+**对既有实测的兼容性**：本会话 §6.2 独占矩阵、minPeriod=3ms、float32-独占拒绝、S32 容器约定
+——全部原样适用于 miniaudio（它就是在同一 CoreAudio/ALSA 参数上工作）；NAudio 降级为
+"设备枚举 + 会话音量"工具（保留价值，不再承载独占）。
+
+**风险登记（诚实清单）**
+1. C++ 核心由 AI 全权维护（用户可读不可写）——以 Taskbar-Lyrics 已验证的协作模式对冲：
+   小 surface + C ABI 边界 + 单测对拍（musicfox T1-T7 用例直译）。
+2. miniaudio 的 s24 packed vs i24-in-i32 需 M2 实测确认（预期支持；不行则核心内 4 字节容器自填，
+   30 行代码级别的补丁）。
+3. Linux 壳的 MPRIS/托盘细节 v2 时补测（本机用户已在 Linux 跑 musicfox → 环境成熟度有保证）。
+
+---
+
+## 8. 需要你确认的问题（Q1 专用）
+
+- ~~Q1-a~~ ✅ Linux 需求真实；Wine 出局（§7.5 证据）。→ **衍生新问题**：Linux 壳与 Windows 版
+  **同期交付还是 v2 跟进？**（同期 → D2 一次铺开两壳；跟进 → Win 壳 M0-M6 先行，Linux 壳并行低风险推进）
+  以及：目标 Linux 发行版/DE/音频栈（PipeWire? 你跑 musicfox 的环境直接当默认假设即可）。
+- ~~Q1-b~~ ✅ Rust 出局 → A 否决。
+- ~~Q1-c~~ ✅ 缓冲升档为主对策（上限 300ms 可配置），线程下沉为最后手段。
+- ~~Q1-d~~ ✅ 框架依赖分发。
+- ~~Q1-e~~ ✅ WPF + WebView2。
+- **新问题 Q1-f**：接受 D2（共享 C++/miniaudio 核心 + 异构薄壳）作为最终路线吗？
+  接受 → AUDIO-ENGINE §2/§3/§7 按 D2 定稿，M0 任务书即可拆出；
+  不接受 → 退回"B（.NET 全托管，Linux 需求降级为 Wine 碰运气）"或继续议。
+
+---
+
+## 9. 主进程推荐（v0.2 定稿）
+
+**D2：C++/miniaudio 共享音频核心 + .NET10/WPF/WebView2 Windows 壳 + Linux 壳（v2，GTK4+WebKitGTK 或 Go 薄壳）**，
+underrun 对策 = 缓冲自动升档（300ms 封顶，Q1-c），分发 = 框架依赖（Q1-d），算法与单测 = musicfox 参照移植。
+
+第一轮的"B 纯 .NET"推荐因 Q1-a 的 Linux 真实需求而修订：B 的独占红利（NAudio）留在 Windows，
+把核心层抽到 C 语言界的 miniaudio 后，跨平台代价只剩 ~6k 行核心 C++（AI 全保 + C ABI 边界 + 对拍单测），
+换来 Win/Linux 共享同一套位完美语义（S32 容器两平台天然一致，§7.6）与前端零改动。
+Q1-b 否决 Rust 后，这是在"用户可读性、独占确定性、Linux 现实"三角里唯一同时满足三点的解。
+
+> 原第一轮加权小结保留于 §1 供历史对照；其"B 胜出"结论隐含前提是 Windows-only，前提已变。
