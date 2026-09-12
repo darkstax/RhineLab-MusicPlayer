@@ -1,4 +1,4 @@
-# IPC 协议契约 v1.1（壳 ↔ 音频核心 ↔ 前端桥）
+# IPC 协议契约 v1.2（壳 ↔ 音频核心 ↔ 前端桥）
 
 > 状态：v1.0 定稿 · 2026-09-12 · 配套 `AUDIO-ENGINE.md` §1/§10（D2 路线，见 `DECISION-Q1-HOST.md` §7.6）
 > 本文件是三方（WPF 壳、C++ 核心、TS 前端桥）的**唯一消息格式权威**；改协议必须改本文并升 `proto`。
@@ -26,6 +26,7 @@ WebView 前端 ──(WebView2 postMessage / WebMessageReceived)── WPF 壳 �
   "t": "<type>",          // 见 §3
   "id": "c-17",           // 仅 request/response：调用方生成的不透明字符串，响应原样回带
   "seq": 1234,            // 仅 event：发送方单调递增（每通道独立），接收方用于丢帧检测
+  "ep": 2,                // 仅核心侧 event 与核心 hello 应答：会话世代，见 §4/§6（v1.2，可选字段）
   "ts": 1699790000123     // 可选，发送方 epoch ms（诊断用，不作时钟同步依据——进度同步用 §6）
 }
 ```
@@ -52,6 +53,12 @@ WebView 前端 ──(WebView2 postMessage / WebMessageReceived)── WPF 壳 �
 {"v":1,"t":"hello","role":"shell","proto":1,"caps":["cmd","evt.position","evt.state","smtc"],"app":"rhine-music-player","ver":"0.1.0"}
 ```
 - 应答方回同构 `hello` 携带自身 `caps`。`proto` 双方取 `min`；`caps` 交集即本次会话能力。
+- **会话世代 `ep`（v1.2）**：核心每次 `hello` **成功应答**（即发出 core 角色 hello 帧）时自增进程内
+  `epoch`，并在应答帧与后续全部 `evt` 帧携带整数 `ep` 字段（`evt` 见 §6）。`ep` 用于接收侧把
+  「`seq` 基线复位」与「核心重启/重连」区分开：`ep` 不变而 `seq` 跳跃 = 丢帧；`ep` 变化 = 新会话，
+  接收方复位该通道 `seq` 基线、不记丢帧（吸收审查 P1-B：跨核心生命周期的 seq 倒退不是丢帧）。
+  可选字段：`ep` 缺失（旧核心）时接收方以连接重建作为复位基线的唯一时机。壳自身角色帧不发 `ep`；
+  壳向核心转发的 `cmd` 不动 `ep`；核心 hello 快照（含 `ep`）经壳聚合 hello 的 `core` 字段透传给前端。
 - **壳→前端的 hello 为聚合帧**（审查 P2-5 收编）：除自身 `role:"shell"` hello 字段外，
   壳附加 `state`（ShellChannel 连接态）与 `core`（核心 hello 快照，未连接时为 null）两个
   **本地扩展字段**。约定：扩展字段仅存在于壳↔前端链路，**永不进入壳↔核心管道帧**；
@@ -96,6 +103,10 @@ M0-M6 增量启用；未实现的 cmd 必须回 `err{code:"not_implemented"}`，
 
 - **position 权威源是设备时钟**（AUDIO-ENGINE §9）；UI 本地外推，收广播偏差 >40ms 起 200ms 平滑收敛。
 - 事件是**可丢的**（`evt` 带 `seq`，丢帧可检测）；`state` 例外：壳/核心对 `state` 做可靠合并（后值覆盖，断线重连必补发最新快照）。
+- **v1.2**：核心发出的每一帧 `evt` 顶层携带可选 `ep`（会话世代，§4）。接收侧丢帧检测规则：
+  每通道记录 `(ep, last_seq)`；`ep` 与上帧不同 → 复位基线（本帧只记 `last_seq`，不计丢失）；
+  `ep` 相同且 `seq > last_seq + 1` → 计入 `framesLost += seq - last_seq - 1`。
+  `seq ≤ last_seq` 视为乱序/重复，只丢帧不计数。
 
 ## 7. 错误码表（`err.error.code`）
 
@@ -145,3 +156,6 @@ M0-M6 增量启用；未实现的 cmd 必须回 `err{code:"not_implemented"}`，
 - v1.1（2026-09-12，M1 前）：§4 收编壳聚合 hello（P2-5）；§5 M1 引擎命令参数定形（duration_ms、
   volume.effective 对象化、config 持久化落点）；§6 state 事件补 idle/playing/paused/stopped 枚举与
   M1 桩的 negotiated=null 豁免。帧语法与 v1.0 兼容，proto 仍为 1。
+- v1.2（2026-09-12，M1）：§4/§6 新增会话世代 `ep`（核心 hello 应答自增并随全部 `evt` 携带）；
+  §6 明确接收侧丢帧检测规则（`ep` 变化复位 seq 基线，吸收 P1-B 的跨生命周期 seq 倒退语义）。
+  帧语法向后兼容，旧接收方忽略 `ep` 即可，proto 仍为 1。
