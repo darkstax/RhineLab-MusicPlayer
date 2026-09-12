@@ -1,6 +1,6 @@
 # 音频引擎与播放设置设计（AUDIO-ENGINE）
 
-> 状态：v0.2 · 2026-09-12（并入 Q2/Q3/Q5/Q7 拍板与本机实测，见 §23 与 DECISION-Q1-HOST.md）
+> 状态：v0.3 · 2026-09-12（**Q1 全案定稿 D2、Windows 先行**；决策全部闭环，进入实施）
 > 范围：RhineLab-MusicPlayer 本机应用化的音频核心、播放设置与系统集成。
 > 借鉴：go-musicfox（无缝/频谱/任务栏歌词协议/配置系统）、btop4win / Taskbar-Lyrics（Windows 原生经验）。
 > 上游视觉与交互皮肤来自 RhineLabUI（MIT）；本文档只覆盖其不具备的"后端/系统"层。
@@ -184,7 +184,7 @@ optional capability interfaces:
   **Linux 位完美真相说明**（实测资料）：PipeWire 通用路径会把容器拉到 32bit 并做协商，
   需 `default.clock.allowed-rates` 或 Pro Audio profile 才不断流——核心按能力探测处理，徽章语义与 Win 一致
   （i24 装在 i32 容器里不算污染）。
-- `[dlna/mpd]`：musicfox 特色（投送输出），v2 再议（Q6）。
+- `[dlna/mpd]`：Q6 定案——**v1 不实现，仅保留枚举值与配置占位**（"留个口子"），不排期不测试。
 - **缓冲与格式实测约束**（§23）：全设备 **float32 独占不支持** → 独占必走整型容器（i16/i24-in-i32）；
   主力设备 minPeriod=3ms → 5/10/25ms 预设全部合法，**underrun 自动升档封顶 300ms**（Q1-c）；虚拟设备（Steam 等）仅 16bit 独占、
   蓝牙预期无独占 → 设备下拉必须渲染每设备能力三态标签（防误配）。
@@ -281,7 +281,9 @@ PWA/预览模式保留上游 `TerminalAudio`（三 stem BGM + 音效），仅作
 
 - **协议**：命名管道 `\\.\pipe\go-musicfox.lyric.v1`，JSON Lines：
   `{type:"lyric", primary, secondary}`、`{type:"config", config:map<string,string>}`。
-  新播放器默认以**同协议**作为 client 连接（可配置 pipe 名以兼容共存/切换来源）。
+  **Q4 定案：设置面只暴露"管道开关 + 管道名"一项**，管内消息格式完全按 musicfox↔Taskbar-Lyrics
+  冻结协议；样式（颜色/对齐/字体）归 Taskbar-Lyrics 插件端配置，我方**不主动下发 config 消息**
+  （保持插件端设置权威，避免双主）。
 - 借用 musicfox 踩过的坑：连接失败 5s 封顶指数退避；config 值一律字符串；
   颜色格式 `0x?[A-F0-9]{6|8}` 或 `theme|auto|空`（空=跟随系统深浅色），非法值**源头告警+按空下发**；
   与 Taskbar-Lyrics C++ 侧 `ParseColorValue` 的 trim 语义对齐。
@@ -369,16 +371,10 @@ offset_ms = 0
 sources = ["embedded", "sidecar"]
 render = "word"           # line|word
 translation = true
-[taskbar]
+[taskbar]                       # Q4 定案:设置面仅此两项
 enabled = false
-protocol = "musicfox-v1"  # 兼容冻结协议; "" = 关
-pipe = ""                 # 自定义覆盖
-primary = ""              # 颜色: 空=跟随主题 | theme | 0xAARRGGBB
-secondary = ""
-alignment = "auto"
-font_family = ""
-font_size_primary = 0
-font_size_secondary = 0
+pipe = ""                       # 空 = 默认 go-musicfox.lyric.v1;可覆盖以与 musicfox 错开
+# 样式配置(颜色/对齐/字体)由 Taskbar-Lyrics 插件端持有,本应用不下发 config 消息
 [audio_fx]                # UI 音效(与音乐引擎无关)
 enabled = true
 volume = 0.55
@@ -458,7 +454,9 @@ T10 设备拔出/默认变更模拟；T11 gapless 长跑队列（1000 曲混合�
 上游 MIT（保留版权头即可，含分发）。若选 C 路线嵌 mpv → GPL 传染随二进制分发；
 D2 依赖树核查：miniaudio 与 dr_flac/dr_mp3/dr_wav = **public domain（unlicense/MIT 双许可可选）**、
 WebView2 SDK/NAudio/TagLib# = BSD-3/MIT、.NET 运行时 = MIT —— **全部宽松无 GPL 传染，GitHub 开源发布无障碍**
-（早期"嵌 mpv → GPL"分支随 C 方案出局而失效）。新仓库 license 待定（Q8）。
+（早期"嵌 mpv → GPL"分支随 C 方案出局而失效）。
+**Q8 定案**：**任何情况下不打包 mpv**——若未来加 mpv 外部引擎（musicfox 式 `mpv.bin` 配置），
+要求用户自行下载并指定路径，**GPL 组件永不进入分发边界**；仓库自身 license 推荐 MIT（发布前终确认）。
 
 ---
 
@@ -486,18 +484,19 @@ WebView2 SDK/NAudio/TagLib# = BSD-3/MIT、.NET 运行时 = MIT —— **全部�
 
 ## 24. 决策台账（v0.2）
 
-- **Q1 宿主路线**：⚙ **已收敛到 D2，待你盖章（Q1-f）**。演化链：初推 B(.NET 纯托管) →
-  你裁定 Linux 真实（Q1-a）+ Rust 出局（Q1-b）+ Wine 不可维护（实测：WebView2 装不进 Wine）
-  ⇒ **D2 = C++/miniaudio 共享音频核心 + Win 壳 .NET10/WPF/WebView2（Q1-e）+ 框架依赖分发（Q1-d）
-  + underrun 主对策=缓冲升档至 300ms（Q1-c）**。细则 `DECISION-Q1-HOST.md` §7.5-§7.6/§9。
-  - **Q1-g（新，唯一剩余阻塞）**：Linux 壳（M7）与 Windows 版**同期并行，还是 Win 先交付、Linux 跟进？**
-    并请告知目标 Linux 环境（发行版/DE/PipeWire——可直接沿用你跑 musicfox 那台当默认假设）。
+- **Q1 宿主路线**：✅ **D2 定稿（Q1-f 通过）**+ **Q1-g：Windows 先行交付，Linux 壳（M7）跟进**
+  （接口自 M2 起即平台无关，Linux 壳为纯增量）。细则 `DECISION-Q1-HOST.md` §7.5-§7.6/§9。
+  Linux 目标环境暂以"用户跑 musicfox 的机器"为默认假设，M7 启动前再确认发行版/PipeWire。
+- **Q4 歌词显示面**：✅ 定（09-12）——**任务栏歌词做**：设置只暴露管道开关+管道名，
+  管内格式 = musicfox↔Taskbar-Lyrics 冻结协议（JSON Lines），样式配置归插件端，我方不下发。
+- **Q6 DLNA/MPD**：✅ 定——v1 不实现，保留 `engine="dlna"` 枚举与配置占位（留口子）。
+- **Q8 license**：✅ 原则定——**零 GPL 入包**：不打包 mpv；未来 mpv 作外部引擎时用户自行下载
+  并配置路径。依赖树全宽松（miniaudio/dr_* PD、NAudio/WebView2/TagLib# BSD/MIT），仓库自身推荐 MIT
+  （发布前终确认）。
+> **决策全部闭环 → M0 开工**（§18 里程碑为准）。
 - **Q2 产品边界**：✅ 定（09-12）——**纯本地曲库**，不接在线源。
 - **Q3 ASIO/DSD**：✅ 定——**v1 出局**，仅留占位；本地现有 2 个 DSF，库存成规模后启动 DoP 专项。
-- **Q4 歌词显示面**：⏳ 待答（不阻塞 M0-M4；决定 M5 范围：任务栏管道做否、桌面歌词窗排期）。
 - **Q5 曲库实况**：✅ 已实测（§23）——解码范围据此收敛为 FLAC/MP3/WAV。
-- **Q6 DLNA/MPD**：⏳ 待答（默认 v2 再说，不阻塞）。
 - **Q7 独占共存**：✅ 定——**keep**：独占时不让位不释放，其他应用自行切换输出设备；
   仅当设备端报错才走 §7.2 被动降级链。
-- **Q8 新仓库 license**：⏳ 待答（发布前需要，不阻塞开发）。
 - **Q9 音频硬件**：✅ 已实测（§23）——USB DAC 独占至 384kHz/24bit 全绿；蓝牙场景待补测。
