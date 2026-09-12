@@ -1,23 +1,23 @@
 <#
 .SYNOPSIS
-  M0 构建：宿主（.NET 10 WPF + WebView2）发布到 dist-host\，并构建前端 Vite 产物。
+  M 系列构建：宿主（.NET 10 WPF + WebView2）发布到 dist-host\，并构建前端 Vite 产物。
 
 .DESCRIPTION
   可用 WSL 或 Windows 侧 PowerShell 7 直接调用；在 WSL 下推荐：
 
-      pwsh.exe -NoProfile -File scripts/m0-build.ps1
+      pwsh.exe -NoProfile -File scripts/m-build.ps1
 
   前端部分需要 node/npm。若当前会话里没有 npm（在 WSL 里从 Windows 侧 pwsh 启动时常见），
   脚本会自动通过 `wsl.exe -d <发行版>` 在 Linux 侧执行 `npm run build`。
 
   产物布局（dist-host\）：
       RhineShell.exe / RhineShell.dll / WebView2Loader.dll …   ← 壳（框架依赖，需已装 WebView2 Runtime）
-      core\RhineCoreStub.exe                                    ← M0 核心桩
+      core\RhineCoreStub.exe                                    ← 核心桩（M1 假引擎）
 
 .EXAMPLE
-  pwsh.exe -NoProfile -File scripts/m0-build.ps1
-  pwsh.exe -NoProfile -File scripts/m0-build.ps1 -SkipFrontend     # 只出宿主
-  pwsh.exe -NoProfile -File scripts/m0-build.ps1 -SkipHost         # 只出前端
+  pwsh.exe -NoProfile -File scripts/m-build.ps1
+  pwsh.exe -NoProfile -File scripts/m-build.ps1 -SkipFrontend     # 只出宿主
+  pwsh.exe -NoProfile -File scripts/m-build.ps1 -SkipHost         # 只出前端
 #>
 [CmdletBinding()]
 param(
@@ -111,7 +111,7 @@ $root = Get-RepoRoot
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $root 'dist-host' }
 $OutputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
 
-Write-Step "M0 build  root=$root  out=$OutputDirectory  config=$Configuration"
+Write-Step "M build  root=$root  out=$OutputDirectory  config=$Configuration"
 
 if (-not $SkipHost) {
   Write-Step 'host (dotnet publish)'
@@ -137,4 +137,4 @@ foreach ($probe in @(
 }
 
 if ($script:missing) { exit 1 }
-Write-Host "`nM0 build OK" -ForegroundColor Green
+Write-Host "`nM build OK" -ForegroundColor Green
