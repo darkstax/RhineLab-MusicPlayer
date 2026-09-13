@@ -31,6 +31,8 @@
 - **协议单写者**：只有当轮 worker 经主进程批准可改 `docs/IPC-PROTOCOL.md`（版本史必须加行）。
 - 每里程碑流水线：worker-qwen 实施 → reviewer-qwen 审查（信任边界纪律：内部 IPC 不做载荷防御、
   假想攻击面归 P2 备案）→ 主进程修 P1 → 中文提交。两轮 review 内收敛，不无限循环。
+- **验收统一入口**：`pwsh scripts/m-verify.ps1 -Level full`（退出码 0 = 全绿）；
+  提交前门槛可用 `-Level quick`；指纹未变自动秒过（-NoCache 强制）。详见 M3-FINDINGS §7。
 
 ## 3. 环境与验证纪律（M0-M2 实测教训，逐条遵守）
 
@@ -44,9 +46,44 @@
 - 并行泳道资源隔离：独立管道名（rhine-music.<lane>.v1）、独立 CDP 端口（9240/9250/9260）、
   独立镜像目录。当前默认**串行推进**（一次一个里程碑），仅当任务书显式声明泳道 B/C 时并行。
 - 子代理：qwen 系（worker-qwen/reviewer-qwen），`timeout: 15` 防心跳误杀，`restarts: 2`。
+  并行派单走 §3.5（`tasks` 数组或 `pi-bg` 后台）。
 - 每轮收尾：`git status` 干净 + 中文 commit（-c user.name="StarL" -c user.email="starl@local"）
   + workflow-status 面板更新 + 生成物不入库。
 - 密钥红线：任何配置/日志输出过 sanitize 管道（本项目无凭据面，防呆条款）。
+
+## 3.5 并行泳道制度（2026-09-13 用户裁定：多线并行 + 并行 reviewer）
+
+**原则**：互不触碰同一文件的子任务，**一律并行派单**；验证阶段同理（多 reviewer 并行）。
+
+### 派单方式（两种，按是否需主进程接手选）
+- `subagent` 工具的 `tasks` 数组：**一次调用内多 agent 并行**，主进程阻塞到全部完成。
+  适合“派完就等结果”的同步收敛点。
+- `pi-bg submit -n <lane> -d <repo> <任务书文件>`：**真后台**（nohup 的 `pi -p`），
+  主进程继续干自己的事（写文档/验收/另一条泳道）。`pi-bg list/status/diff/wait` 跟踪。
+  适合“主进程还有活要干”的场景（goal 循环首选）。
+
+### 四条护栏（违反即翻车，不是建议）
+1. **文件所有权互斥**：任务书必写“文件所有权”清单，交叉即拆单或改串行。
+   reviewer 首先核对越界（M2/M3 已执行此纪律）。
+2. **共享文件单写者**：`docs/IPC-PROTOCOL.md` 与 `src/desktop-bridge.ts` 是天然共享面
+   → **只允许主进程改**（协议先行，泳道提需求、主进程升版本后各泳道才能实现）。
+3. **git 串行**：并行 agent **只写盘不提交**（任务书明写“不 commit”）；
+   主进程按泳道逐次验收提交。否则 index.lock 互斥 + 交义暂存区会混入他人半成品。
+   （若确实需要各自提交 → 用 `git worktree` 独立工作目录，代价是合并成本，默认不采用。）
+4. **验证资源隔离**：每泳道独立管道名（`rhine-music.<lane>.v1`）、独立 CDP 端口
+   （9240/9250/9260）、**独立镜像目录**（`m-verify -MirrorRoot %LOCALAPPDATA%\RhineMusic\work-<lane>`）。
+   ⚠ 并行 `m-verify` 目前**不共享构建产物**（各自镜像各自编），CPU/IO 会互相干扰
+   → **CPU 采样类断言只在串行阶段跑**（`-Level quick` 可并行，`full` 含 CPU 采样需串行）。
+
+### 并行度上限
+同时最多 **2 条实现泳道 + 1 条纯文档泳道**。原因：本会话实测 Windows 侧构建（dotnet+cmake）
+与 WebView2 起窗都是重资源操作，三条以上并行会因调度拖慢到不如串行，且噪声让 CPU 断言失真。
+
+### reviewer 并行
+同一里程碑内多个泳道完成后，**一次 `tasks` 并行派 2-3 个 reviewer**（各自只审自己泳道的 diff 面），
+比串行审快得多；交叉影响面（协议/共享文件）由主进程单独自审。两轮不收敛则停下报告（§5.3）。
+
+---
 
 ## 4. 机器可验证的完成定义（每里程碑合入前）
 
