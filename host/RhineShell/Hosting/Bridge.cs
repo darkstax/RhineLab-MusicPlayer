@@ -42,6 +42,29 @@ public sealed class Bridge
     /// </summary>
     public event Action<JsonObject>? CoreFrameObserved;
 
+    /// <summary>M5c 钩子（协议 v1.4 lyric.show / taskbar.set）：壳侧自答 ack，同时把帧抛给
+    /// 订阅者（TaskbarWriter.Install）；无订阅者时 delivered=false 不报错（Q4：样式归插件端，
+    /// 本应用只在用户显式开启时写管道）。返回值被忽略；处理器异常自捕获。</summary>
+    public event Func<JsonObject, Task<bool>>? LyricShowRequested;
+    public event Func<JsonObject, Task<bool>>? TaskbarSetRequested;
+
+    private async Task<bool> RaiseAsync(Func<JsonObject, Task<bool>>? handler, JsonObject frame)
+    {
+        if (handler is null) return false;
+        foreach (Func<JsonObject, Task<bool>> one in handler.GetInvocationList())
+        {
+            try
+            {
+                if (await one(frame).ConfigureAwait(false)) return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"lyric/taskbar handler failed: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+        return false;
+    }
+
     /// <summary>页面加载完成：先补 hello，再重放最新 state 快照（协议 §9）。</summary>
     public void ReplayToFrontend()
     {
@@ -159,6 +182,21 @@ public sealed class Bridge
         if (cmd is "config.get" or "config.set")
         {
             Post(ConfigCommand(id, cmd, frame));
+            return;
+        }
+
+        // 协议 §5（M5c/v1.4）：lyric.show / taskbar.set 壳侧自答 + 事件钩子（不经核心）。
+        if (cmd is "lyric.show" or "taskbar.set")
+        {
+            var handler = cmd == "lyric.show" ? LyricShowRequested : TaskbarSetRequested;
+            var delivered = await RaiseAsync(handler, frame).ConfigureAwait(false);
+            Post(new JsonObject
+            {
+                ["v"] = 1,
+                ["t"] = "ack",
+                ["id"] = id,
+                ["result"] = new JsonObject { ["delivered"] = delivered },
+            });
             return;
         }
 
