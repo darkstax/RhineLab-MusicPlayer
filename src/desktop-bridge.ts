@@ -1,7 +1,7 @@
 /**
  * 前端 ↔ 桌面壳（WebView2）的唯一入口。
  *
- * 协议唯一权威：docs/IPC-PROTOCOL.md v1.2。本文件**不翻译消息格式**：
+ * 协议唯一权威：docs/IPC-PROTOCOL.md v1.3。本文件**不翻译消息格式**：
  * 经 `window.chrome.webview.postMessage(string)` / `WebMessageReceived` 直传的 JSON
  * 与管道层完全一致（`v/t/id/seq/ts/ep` + 顶层 `cmd`/`evt`/`data`）。
  *
@@ -203,6 +203,19 @@ class DesktopBridge {
     const entry = { type, fn };
     this.listeners.add(entry);
     return () => this.listeners.delete(entry);
+  }
+
+  /**
+   * 频谱订阅开关（协议 §5/§6 v1.3，M3）：`spectrum.on/off` → `{enabled}`。
+   * 非桌面环境以 `not_desktop` reject（调用方自行静默，web 降级零异常）。
+   * 便捷方法供 spectrum-bridge 集中管理，不在 UI 代码里散写 cmd 字符串。
+   */
+  spectrumOn(): Promise<unknown> {
+    return this.call("spectrum.on", {});
+  }
+
+  spectrumOff(): Promise<unknown> {
+    return this.call("spectrum.off", {});
   }
 
   /** 丢帧检测快照（验收 4 取证；M6 诊断页复用）。 */

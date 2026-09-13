@@ -230,3 +230,34 @@
     flex-basis: 100%;
   }
 }
+
+/* M3 微型频谱条（任务书 C3）：16 根 scaleY，与主题同色系；数据链路可视证据，
+   非 playing 时降透明度退场（JS 写 data-active）。只用 transform，不触发布局。
+   接管修正：原放在 .pb-main 行内——980px 定宽下内容已接近饱和（scrollW 1083 >
+   clientW 978），频谱条被挤到容器右缘外（实测 x=1133 > 1123，截图不可见）；
+   改为播放条下方的独立右对齐行，不参与主行 flex 分配。 */
+#player-bar .pb-spectrum {
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-end;
+  gap: 2px;
+  height: 20px;
+  margin-top: 6px;
+  opacity: 0.35;
+  transition: opacity 0.4s ease;
+}
+
+#player-bar .pb-spectrum[data-active="1"] {
+  opacity: 1;
+}
+
+#player-bar .pb-spectrum i {
+  display: block;
+  width: 4px;
+  height: 100%;
+  transform-origin: bottom center;
+  transform: scaleY(0.04);
+  background: var(--theme-accent, #9b7247);
+  border-radius: 1px 1px 0 0;
+  will-change: transform;
+}

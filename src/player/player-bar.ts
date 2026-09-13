@@ -1,5 +1,6 @@
 import { createRollingText } from "@kitlangton/rolling-number";
 import { playerStore, type PlayerSnapshot } from "./player-store";
+import { spectrumBridge } from "./spectrum-bridge";
 import { FidelityBadges } from "./FidelityBadges";
 
 /**
@@ -83,6 +84,7 @@ export function mountPlayerBar(root: HTMLElement): () => void {
         <button type="button" class="pb-btn pb-play-btn">LOAD</button>
       </div>
     </div>
+    <div class="pb-spectrum" aria-hidden="true">${"<i></i>".repeat(16)}</div>
     <div class="pb-toast" role="status" hidden></div>
   `;
 
@@ -102,6 +104,44 @@ export function mountPlayerBar(root: HTMLElement): () => void {
   const idInput = el(".pb-id") as HTMLInputElement;
   const playBtn = el(".pb-play-btn") as HTMLButtonElement;
   const toastEl = el(".pb-toast");
+  const spectrumEl = root.querySelector<HTMLElement>(".pb-spectrum")!;
+  const spectrumBars = Array.from(spectrumEl.querySelectorAll<HTMLElement>("i"));
+
+  /** M3：本挂载内额外订阅的清理（随返回的 dispose 统一执行）。 */
+  const spectrumCleanups: (() => void)[] = [];
+
+  // M3 微型频谱条（任务书 C3）：16 根，bands_l 按对数距离抽稀，CSS transform scaleY；
+  // rAF 自消：无新帧（>400ms）自然归零，不常驻动画帧。桌面/桩/web 统一消费 latestFrame。
+  {
+    let dirty = false;
+    let raf = 0;
+    const paint = () => {
+      const frame = spectrumBridge.latestFrame();
+      const fresh = frame !== null && performance.now() - frame.receivedAt < 400;
+      for (let i = 0; i < spectrumBars.length; i++) {
+        let level = 0;
+        if (frame && fresh) {
+          // 16 根 → 64 带的对数抽稀（低频段多分），取段内最大。
+          const from = Math.floor(Math.pow(i / spectrumBars.length, 1.35) * 64);
+          const to = Math.max(from + 1, Math.floor(Math.pow((i + 1) / spectrumBars.length, 1.35) * 64));
+          for (let b = from; b < Math.min(to, 64); b++) level = Math.max(level, frame.bandsL[b]);
+        }
+        spectrumBars[i].style.transform = `scaleY(${Math.max(0.04, level).toFixed(3)})`;
+      }
+      dirty = false;
+      raf = fresh || dirty ? requestAnimationFrame(paint) : 0;
+    };
+    const offFrame = spectrumBridge.onFrame(() => {
+      dirty = true;
+      if (!raf) raf = requestAnimationFrame(paint);
+    });
+    const offState = playerStore.subscribe((snapshot) => {
+      // 停止/暂停时退场（归零由 fresh 超时自然完成）；订阅保留，重播无需重建。
+      spectrumEl.dataset.active = snapshot.state === "playing" ? "1" : "0";
+      if (!raf) raf = requestAnimationFrame(paint);
+    });
+    spectrumCleanups.push(offFrame, offState);
+  }
 
   // 曲目名用上游同款滚动文字（direct / 同时启动 / 460ms，与主标题一致）。
   // UI 修复（用户定方向）：组件挂在**内层 .pb-title-roll**（按内容宽），外层 .pb-title 是
@@ -258,6 +298,8 @@ export function mountPlayerBar(root: HTMLElement): () => void {
 
   return () => {
     unsubscribe();
+    for (const cleanup of spectrumCleanups) cleanup();
+    spectrumCleanups.length = 0;
     playerStore.dispose();
     root.replaceChildren();
   };

@@ -44,6 +44,21 @@ declare global {
 const DEFAULT_DURATION_MS = 180_000;
 const TICK_MS = 1000;
 
+/**
+ * 曲目展示标签（M3 验收发现修正）：file:<路径> 取文件名去扩展（与核心 TrackTitle 同逻辑，
+ * 否则整条 Windows 路径塞进 150px 窗口毫无意义）；档案号等其它 id 维持 ARCHIVE 前缀。
+ */
+export function trackLabelOf(trackId: string): string {
+  const filePrefix = "file:";
+  if (trackId.startsWith(filePrefix)) {
+    const path = trackId.slice(filePrefix.length);
+    const base = path.split(/[\\/]/).pop() ?? path;
+    const dot = base.lastIndexOf(".");
+    return dot > 0 ? base.slice(0, dot) : base;
+  }
+  return `ARCHIVE ${trackId}`;
+}
+
 type Listener = (snapshot: PlayerSnapshot) => void;
 
 const asNumber = (value: unknown, fallback: number) =>
@@ -190,7 +205,7 @@ export class PlayerStore {
     this.emit({
       state,
       trackId,
-      trackLabel: trackId ? `ARCHIVE ${trackId}` : this.snapshot.trackLabel,
+      trackLabel: trackId ? trackLabelOf(trackId) : this.snapshot.trackLabel,
       positionMs: asNumber(data.position_ms, this.snapshot.positionMs),
       durationMs: asNumber(data.duration_ms, this.snapshot.durationMs),
       volume: asNumber(data.volume, this.snapshot.volume),
@@ -310,12 +325,12 @@ export class PlayerStore {
     }
 
     // 先本地更新标签，不等 IPC 往返（选曲反馈立即性；真快照随后覆盖）。
-    this.emit({ trackId: id, trackLabel: `ARCHIVE ${id}` });
+    this.emit({ trackId: id, trackLabel: trackLabelOf(id) });
     await this.command(
       () => bridge.call("engine.play", { track_id: id, duration_ms: durationMs }),
       () => {
         this.local.play(id, durationMs);
-        return { trackId: id, trackLabel: `ARCHIVE ${id}`, durationMs };
+        return { trackId: id, trackLabel: trackLabelOf(id), durationMs };
       },
     );
   }
