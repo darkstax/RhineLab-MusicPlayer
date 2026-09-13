@@ -73,8 +73,20 @@ internal static class Program
     /// <summary>任务书验收 2 的落盘 trace（与壳日志双证）；未指定 --trace 时仅日志。</summary>
     private static StreamWriter? _trace;
 
+    /// <summary>验证加速（m-verify A 方案）：<c>--time-scale N</c> 把假引擎时钟按 N 倍推进
+    /// （1Hz tick 仍真实发帧，故帧数不变、位置跳跃变快）；仅影响 FakeEngine 虚拟时钟，
+    /// halt/uptime/持久化一律真实时间。默认 1 = 行为与旧版完全一致。</summary>
+    private static double _timeScale = 1.0;
+    private static readonly long TimeBaseMs = IpcFrame.NowMs();
+
+    private static long ScaledNowMs()
+    {
+        var real = IpcFrame.NowMs();
+        return _timeScale == 1.0 ? real : TimeBaseMs + (long)((real - TimeBaseMs) * _timeScale);
+    }
+
     /// <summary>假引擎单例：状态跨连接保留（页面刷新/壳重连不重置播放），音量另有文件持久化。</summary>
-    private static readonly FakeEngine Engine = new(IpcFrame.NowMs);
+    private static readonly FakeEngine Engine = new(ScaledNowMs);
 
     private static long Epoch => Interlocked.Read(ref _epoch);
 
@@ -88,6 +100,7 @@ internal static class Program
             Console.WriteLine("  --pipe <name>          named pipe (default: \\\\.\\pipe\\rhine-music.core.v1)");
             Console.WriteLine("  --kill-after <sec>     simulate a crash after N seconds (exit code 7)");
             Console.WriteLine("  --halt-events <sec>    drop evt output for N seconds (seq keeps burning; frame-loss test hook)");
+            Console.WriteLine("  --time-scale <N>       advance the fake clock N× (1-1000; tick cadence unchanged; for fast verification)");
             Console.WriteLine("  --trace <file>         append every emitted engine event to a file (acceptance evidence)");
             Console.WriteLine("  --verbose              log every frame");
             Console.WriteLine("  stdin: 'exit' or 'bye' => orderly shutdown; 'halt <sec>' => halt events at runtime");
@@ -107,6 +120,14 @@ internal static class Program
         {
             _haltSeconds = haltSeconds;
             Log("info", $"evt halt armed: {haltSeconds}s (applies on first hello handshake)");
+        }
+
+        if (ArgValue(args, "--time-scale") is { } scaleText &&
+            double.TryParse(scaleText, System.Globalization.CultureInfo.InvariantCulture, out var scale) &&
+            scale >= 1.0 && scale <= 1000.0)
+        {
+            _timeScale = scale;
+            Log("info", $"fake engine time scale = {scale:F0}×");
         }
 
         if (ArgValue(args, "--trace") is { } tracePath)
@@ -619,6 +640,8 @@ internal static class Program
     /// <summary>
     /// 每秒 tick（任务书 A2）：发 evt{kind:"position"}；播完自动 evt{kind:"state",state:"stopped"}。
     /// 与命令补发帧共用 <see cref="Emit"/>，seq 单调、ep 恒为当前会话世代。
+    /// 注：<c>--time-scale N</c> 只缩放引擎虚拟时钟，**tick 保持真实 1Hz**——
+    /// 否则“窗长缩短 + 帧密提升”两种加速叠加会使末帧位置超出曲长（与曲终断言冲突）。
     /// </summary>
     private static async Task PublishEvents(PipeSink send)
     {
@@ -642,7 +665,12 @@ internal static class Program
         var next = DateTime.UtcNow + period;
         while (!Shutdown.IsCancellationRequested)
         {
-            await Task.Delay(next - DateTime.UtcNow, Shutdown.Token).ConfigureAwait(false);
+            // 审查 M-4 修复：并行负载下单次 Delay 可超时 33ms，next 落后于 now 时
+            // (next - UtcNow) 为负 → Task.Delay 抛 ArgumentOutOfRangeException 杀死发布循环
+            // （实测：spectrum 8 帧后静默停发）。到期时间钳非负；漂移复位逻辑保留在下行。
+            var due = next - DateTime.UtcNow;
+            if (due < TimeSpan.Zero) { due = TimeSpan.Zero; }
+            await Task.Delay(due, Shutdown.Token).ConfigureAwait(false);
             next += period;
             if (DateTime.UtcNow - next > TimeSpan.FromMilliseconds(200)) next = DateTime.UtcNow + period;
             if (!_spectrumOn) continue;

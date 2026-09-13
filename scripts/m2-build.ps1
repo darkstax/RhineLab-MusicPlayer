@@ -49,10 +49,28 @@ if (-not (Test-Path -LiteralPath $srcHost)) { throw "missing $srcHost" }
 $dstHost = Join-Path $MirrorRoot 'host'
 New-Item -ItemType Directory -Force -Path $dstHost | Out-Null
 # /MIR 会删除目标多余文件——目标专属镜像目录，安全。
-& robocopy $srcHost $dstHost /MIR /XD bin obj build .vs /NFL /NDL /NJH /NJS /R:1 /W:1 | Out-Null
+# ⚠ 时间戳陷阱（实测踩过）：robocopy 保留 WSL 源 mtime，若它早于 build/ 里上次产物，
+# CMake/MSBuild 增量判定会误认"无需重编"→ 静默测旧产物。对策：从 robocopy 日志取
+# **实际被复制**的行（Newer/New File/Changed = 源比目标新），把对应目标文件 mtime 抬到当前。
+$robolog = Join-Path $env:TEMP ("m2-robolog-{0}.txt" -f [guid]::NewGuid().ToString('N'))
+& robocopy $srcHost $dstHost /MIR /XD bin obj build .vs /NFL /NDL /NJH /NP /R:1 /W:1 /LOG:$robolog | Out-Null
 $rc = $LASTEXITCODE
 if ($rc -ge 8) { throw "robocopy failed with code $rc" }
-Write-Host "robocopy code=$rc  $srcHost -> $dstHost" -ForegroundColor DarkGray
+# 日志行形式："    Newer   <size>\t<path>"（UTF-16 编码）；取制表符末段为源绝对路径。
+$touched = 0
+if (Test-Path -LiteralPath $robolog) {
+  $now = Get-Date
+  foreach ($line in (Get-Content -LiteralPath $robolog -Encoding Unicode -ErrorAction SilentlyContinue)) {
+    if ($line -notmatch '^\s{2,}(Newer|New File|Changed|Older|Copy)\s') { continue }
+    $srcFile = ($line -split '	')[-1].Trim()
+    if (-not $srcFile -or -not (Test-Path -LiteralPath $srcFile)) { continue }
+    $rel = $srcFile.Substring($srcHost.TrimEnd('\').Length).TrimStart('\')
+    $dstFile = Join-Path $dstHost $rel
+    if (Test-Path -LiteralPath $dstFile) { (Get-Item -LiteralPath $dstFile -Force).LastWriteTime = $now; $touched++ }
+  }
+  Remove-Item -LiteralPath $robolog -ErrorAction SilentlyContinue
+}
+Write-Host "robocopy code=$rc touched=$touched  $srcHost -> $dstHost" -ForegroundColor DarkGray
 $srcCore = Join-Path $repoRoot 'host/core'
 $dstCore = Join-Path $dstHost 'core'
 if ($MirrorOnly) { Write-Host 'MirrorOnly: done' -ForegroundColor Green; exit 0 }

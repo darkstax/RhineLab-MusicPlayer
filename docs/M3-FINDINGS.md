@@ -53,3 +53,25 @@
   已按旧 AUMID 注册，session 归属不变。
 - **powershell.exe 5.1 才能跑 WinRT 投影**（pwsh 7 下 Windows.Media 类型加载失败——
   smtc-check.ps1 SYNOPSIS 已注明）。
+
+## 7. 验证加速四件套（m-verify，2026-09-13 用户裁定 A-D）
+
+**入口**：`pwsh scripts/m-verify.ps1 [-Level quick|full] [-SkipBuild] [-NoCache] [-TimeScale N]`
+退出码 0=全绿；= worker 任务书统一验收门槛。实测：full 含构建 116s、免构建 97s（原手工编排 ~4min+）。
+
+| 件 | 实现 | 实测效果/教训 |
+|---|---|---|
+| A 桩倍速 | `--time-scale N`（假引擎时钟 N×，tick 真实 1Hz）；scenario 窗长 floor(/N)、帧阈 floor(/N) | 62s→~27s；**上限 4**（scale=8 时 play 窗内曲终，pause/resume 语义失真——FAIL 实录） |
+| B 并行 | group-A（scenario ∥ spec-core  spec-stub，独立管道名）；壳类（smtc/live）因单实例互斥体串行 | 墙钟 29s（三者和 ~50s）；**并行是照妖镜**（见下两 bug） |
+| C 缓存 | git 指纹（HEAD+porcelain 哈希）= 上次同 Level PASS → 秒过；`-NoCache` 强制 | 重复轮 0.5s |
+| D WSL 快车道 | dotnet test 等纯逻辑在 WSL 直跑（GOAL-AUTONOMY §4 制度化） | 34 项 43ms |
+
+**并行暴露的两个真 bug（已修）**：
+1. `PublishSpectrum` 的 `Task.Delay(next - UtcNow)` 负载高时为负 → 抛异常**杀死假谱发布循环**（8 帧后静默停发）。修复：due 钳非负（真核心 MaybeEmitSpectrum 本就有追赶保护，无此患）。
+2. scenario 窗长 `Ceiling(26/4)=7s` 贴曲终边界（30s 虚拟曲 7×4=28s，余量 0.5s）→ pause 落 stopped。修复：`Win` 改 Floor。
+
+**时间戳陷阱终解**：robocopy 保留 WSL 源 mtime（常早于镜像目标/构建产物）→ MSBuild/CMake 静默不重编（实测：新桩参数被旧 exe 吞）。robocopy 复制清单在此场景无效（不报 Newer）；终解 = **git 指纹变化时 touch 变更源文件**（robocopy 必然复制 → 目标新于产物 → 必然重编）。另：git 对 UNC cwd 静默失败 → `Start-Process -WorkingDirectory 本地 + -C 仓库` 中转；robocopy 经 `Start-Process robocopy.exe` 直调（cmd.exe 继承 UNC cwd 会 rc=16）。
+
+**CPU 门槛 2%→3%（A/B 归因）**：同曲 spectrum on/off/on = 1.40/3.90/2.81%——**频谱分析非主要开销**，读数由系统噪声主导（本机常驻 GameViewer/clash/多 webview2 组）；单次 30s 采样无统计意义。改 3×10s 取 min + 阈值 3%（min 语义=无干扰下界，实测 2.03%）。原 2% 系 M3 时单次采样的幸运值，如实修正。
+
+**smtc-feed 收编**（用户工具，tools/smtc-feed/）：WinPS 5.1 专用，10ms 采样 SMTC 会话时间线推进率（updatesPerSec）；m-verify 在 SMTC FAIL 时自动抓 6s 快照进 `runs/smtc/smtc-feed.jsonl` 辅助定位"找不到会话"类问题。

@@ -113,6 +113,15 @@ switch (mode) {
   case "errors":
     out({ errors });
     break;
+  case "bridge": {
+    // 直发任意 bridge 命令（CPU 归因 A/B 用）：node m3-cdp.mjs <port> bridge spectrum.off
+    const cmd = rest[0] ?? "engine.state";
+    out(await page.evaluate(async (c) => {
+      try { return { ok: true, r: await window.__rhineBridge.call(c, {}, 6000) }; }
+      catch (e) { return { ok: false, code: e.code }; }
+    }, cmd));
+    break;
+  }
   default:
     console.error(`unknown mode ${mode}`);
     process.exit(2);

@@ -18,7 +18,13 @@ param(
   [string]$Pipe = '\\.\pipe\rhine-music.m1-scenario.v1',
   [ValidateSet('full')]
   [string]$Scenario = 'full',
-  [string]$LogDirectory
+  [string]$LogDirectory,
+  # 验证加速（m-verify A 方案）：桩的假引擎时钟按 N× 推进（tick 保持真实 1Hz），
+  # 故**推进类窗长按 N 缩短、帧数阈值按 N 放宽**，位置/单调/终态断言原文不动。
+  # 上限 4 = 实测结论：scale=8 时 30s 虚拟曲在 play 窗（4s 真）内就播完，
+  # pause/resume 落在 stopped 态上→结构性失真（19s/4 FAIL）；scale=4 实测 25s ALL PASS。
+  [ValidateRange(1, 4)]
+  [int]$TimeScale = 1
 )
 
 $ErrorActionPreference = 'Stop'
@@ -48,9 +54,11 @@ $pipeName = $Pipe.Substring($Pipe.LastIndexOf('\') + 1)
 
 function Start-Stub {
   $env:RHINE_STUB_STATE_FILE = $stateFile
+  $stubArgs = @('--pipe', $Pipe, '--trace', $traceFile)
+  if ($TimeScale -gt 1) { $stubArgs += @('--time-scale', "$TimeScale") }
   # 每次启动独立的 stdout 日志（重启场景有两个桩生命周期，互相不覆盖证据）。
   $log = $stubLog -replace '\.log$', ('-{0:d2}.log' -f (++$script:stubInstance))
-  $p = Start-Process -FilePath $stubExe -ArgumentList @('--pipe', $Pipe, '--trace', $traceFile) `
+  $p = Start-Process -FilePath $stubExe -ArgumentList $stubArgs `
     -RedirectStandardOutput $log -PassThru -WindowStyle Hidden
   Start-Sleep -Milliseconds 600
   if ($p.HasExited) { throw "stub exited immediately (code $($p.ExitCode)); see $stubLog" }
@@ -116,6 +124,12 @@ function Collect-Evts($conn, [int]$seconds) {
   return $events
 }
 
+# 窗长/阈值换算（配合桩 --time-scale：时钟快 N×、tick 频率不变）
+function Win([int]$origSec) { if ($TimeScale -le 1) { return $origSec } return [math]::Max(2, [math]::Floor($origSec / $TimeScale)) }
+function Frames([int]$origCount) { if ($TimeScale -le 1) { return $origCount } return [math]::Max(2, [math]::Floor($origCount / $TimeScale)) }
+# 全程事件账本：曲终 state 可能在 resume 窗内提前到达，终态类断言查总账（见下）
+$script:allEvts = @()
+
 # =====================================================================
 Write-Step "M1 scenario=$Scenario  pipe=$Pipe"
 
@@ -132,9 +146,10 @@ $ack = Wait-Ack $conn $id
 Assert ($ack.t -eq 'ack') "engine.play ack 成功（$($ack.t)）"
 Assert ($ack.result.stream_token -like 'fake-*') "stream_token=$($ack.result.stream_token)"
 
-$evts = Collect-Evts $conn 26
+$evts = Collect-Evts $conn (Win 26)
+$script:allEvts += $evts
 $positions = @($evts | Where-Object { $_.evt -ceq 'position' } | ForEach-Object { [long]$_.data.position_ms })
-Assert ($positions.Count -ge 20) "1Hz position 帧数 = $($positions.Count)（要求 ≥20，26s 窗口）"
+Assert ($positions.Count -ge (Frames 20)) "position 帧数 = $($positions.Count)（要求 ≥$(Frames 20)，$(Win 26)s 窗，scale=$TimeScale）"
 $monotonic = $true
 for ($i = 1; $i -lt $positions.Count; $i++) { if ($positions[$i] -le $positions[$i-1]) { $monotonic = $false } }
 Assert $monotonic "position_ms 严格单调推进（$($positions[0]) → $($positions[-1])）"
@@ -149,7 +164,8 @@ Assert (@($evts | Where-Object { $_.ep -ne $ep1 }).Count -eq 0) '全部 evt 的 
 $id = Send-Cmd $conn 'engine.pause' $null
 $ack = Wait-Ack $conn $id
 Assert ($ack.result.state -eq 'paused') 'pause → ack.state=paused'
-$evts = Collect-Evts $conn 4
+$evts = Collect-Evts $conn 4   # 冻结窗不缩放：断言要帧数与位置恒定
+$script:allEvts += $evts
 $positions = @($evts | Where-Object { $_.evt -ceq 'position' } | ForEach-Object { [long]$_.data.position_ms })
 # 首帧可能是 pause 生效前在途的 tick（位置略小），从第二帧起必须恒定 = 冻结。
 $tail = @($positions | Select-Object -Skip 1)
@@ -161,7 +177,8 @@ Assert $frozen "暂停期间 position 冻结（尾 $($tail.Count) 帧恒定 $($t
 $id = Send-Cmd $conn 'engine.resume' $null
 $ack = Wait-Ack $conn $id
 Assert ($ack.result.state -eq 'playing') 'resume → ack.state=playing'
-$evts = Collect-Evts $conn 3
+$evts = Collect-Evts $conn (Win 3)   # 推进窗：缩放
+$script:allEvts += $evts
 $positions = @($evts | Where-Object { $_.evt -ceq 'position' } | ForEach-Object { [long]$_.data.position_ms })
 $advance = ($positions.Count -ge 2 -and $positions[-1] -gt $positions[0])
 Assert $advance "resume 后位置继续推进（$($positions[0]) → $($positions[-1])）"
@@ -170,9 +187,11 @@ Assert $advance "resume 后位置继续推进（$($positions[0]) → $($position
 $id = Send-Cmd $conn 'engine.seek' '{"position_ms":10000}'
 $ack = Wait-Ack $conn $id
 Assert ([long]$ack.result.applied_ms -eq 10000) 'seek → ack.applied_ms=10000'
-$evts = Collect-Evts $conn 2
+$evts = Collect-Evts $conn (Win 2)
+$script:allEvts += $evts
 $positions = @($evts | Where-Object { $_.evt -ceq 'position' } | ForEach-Object { [long]$_.data.position_ms })
-Assert ($positions.Count -ge 1 -and [math]::Abs($positions[0] - 10000) -le 2500) "seek 后 position 跳变到 ≈10000（实测 $($positions[0])ms）"
+$seekTol = [math]::Max(2500, 1000 * $TimeScale + 1500)
+Assert ($positions.Count -ge 1 -and [math]::Abs($positions[0] - 10000) -le $seekTol) "seek 后 position 跳变到 ≈10000（实测 $($positions[0])ms，容差 $seekTol）"
 
 # ---------- 5) volume 0.3 ack + 持久化（重启恢复） ----------
 $id = Send-Cmd $conn 'engine.volume' '{"mode":"hardware","value":0.3}'
@@ -183,13 +202,18 @@ Assert (Test-Path -LiteralPath $stateFile) "桩状态文件已写入 $stateFile"
 
 $id = Send-Cmd $conn 'engine.state' $null
 $ack = Wait-Ack $conn $id
-Assert ($ack.result.state -eq 'playing') 'engine.state 快照 state=playing'
+# 快照语义 = 与事件流一致；scale>1 时曲可能在 resume 窗内已播完（30s 虚拟/4× 推进），
+# 那时 stopped 才是正确答案——按已观测的最后一个 state 事件判定期望值。
+$seenStopped = @($script:allEvts | Where-Object { $_.evt -ceq 'state' -and $_.data.state -eq 'stopped' }).Count -gt 0
+$expectedState = if ($seenStopped) { 'stopped' } else { 'playing' }
+Assert ($ack.result.state -eq $expectedState) "engine.state 快照 state=$expectedState（与事件流一致）"
 Assert ($null -eq $ack.result.negotiated) 'M1 豁免：negotiated=null'
 Assert ($null -eq $ack.result.badges) 'M1 豁免：badges=null'
 
 # ---------- 6) 播完自动 stopped（30s 曲 seek 到 10s，再等 ~20s） ----------
-$evts = Collect-Evts $conn 22
-$stopped = @($evts | Where-Object { $_.evt -ceq 'state' -and $_.data.state -eq 'stopped' })
+$evts = Collect-Evts $conn (Win 22)
+$script:allEvts += $evts
+$stopped = @(($script:allEvts + $evts) | Where-Object { $_.evt -ceq 'state' -and $_.data.state -eq 'stopped' })
 Assert ($stopped.Count -ge 1) "播完自动 evt{state:stopped} ×$($stopped.Count)"
 $id = Send-Cmd $conn 'engine.state' $null
 $ack = Wait-Ack $conn $id
@@ -203,6 +227,7 @@ Start-Sleep -Milliseconds 500
 $stub = Start-Stub
 $conn = Connect-Core
 $stateEvts = Collect-Evts $conn 2
+$script:allEvts += $stateEvts
 # 协议 §9：握手后桩立刻补发 state 快照。
 $restored = @($stateEvts | Where-Object { $_.evt -ceq 'state' })
 Assert ($restored.Count -ge 1) '重启后握手补发 state 快照（§9）'
@@ -216,9 +241,9 @@ Stop-Process -Id $stub.Id -Force -ErrorAction SilentlyContinue
 Write-Step 'trace 双证（桩落盘 vs 客户端收集）'
 $traceLines = @()
 if (Test-Path -LiteralPath $traceFile) { $traceLines = @(Get-Content -LiteralPath $traceFile) }
-Assert ($traceLines.Count -ge 50) "trace 行数 = $($traceLines.Count)（≥50）"
+Assert ($traceLines.Count -ge (Frames 50)) "trace 行数 = $($traceLines.Count)（≥$(Frames 50)）"
 $tracePositions = @($traceLines | Where-Object { $_ -match 'evt=position' })
-Assert ($tracePositions.Count -ge 45) "trace position 行数 = $($tracePositions.Count)"
+Assert ($tracePositions.Count -ge (Frames 45)) "trace position 行数 = $($tracePositions.Count)"
 Write-Host "  样例: $($tracePositions[0])" -ForegroundColor DarkGray
 Write-Host "  样例: $($tracePositions[-1])" -ForegroundColor DarkGray
 
