@@ -1,6 +1,6 @@
 # M6 计划书：设置三层 UI + 信号路径图 + 诊断 + 打包交付（zip + exe）
 
-> 状态：**草案，待用户过目——未开工** · 2026-09-13
+> 状态：**已批准（09-13 用户：P-1 Inno Setup 通过）——待开工** · 2026-09-13
 > 依据：`docs/GOAL-AUTONOMY.md` §0/§2/§4/§5/§6（Windows 版交付线的最后一个里程碑）、
 > `docs/AUDIO-ENGINE.md` §13（信号路径图定义）/§14（诊断页"优先级不做可裁剪"）/§15（配置系统与三层设置）/§21（许可备忘）/§24（Q8 台账）、
 > `docs/IPC-PROTOCOL.md` v1.3、`docs/M5-PLAN-v2.md`（曲库/歌词/专辑墙交付面）、
@@ -29,7 +29,7 @@ zip 便携版 + exe 安装器）+ **许可终稿**（LICENSE 与 THIRD-PARTY-NOT
 | 事项 | 计划假设的来源 | 实测事实 | 结论 |
 |---|---|---|---|
 | LICENSE 需"换成 MIT" | 任务书原文 | **仓库根 `LICENSE` 已是 MIT**（`Copyright (c) 2026 LBEILC`，commit `e27c2b3` "docs: license project code under MIT and clarify asset rights"） | 本项从"改写"降级为**核对 + 补资产权利说明**（§6.1） |
-| 安装器选型 | Q8 台账写"**exe（NSIS 安装器）**"；M5-PLAN v1 §6 写"推荐 **Inno**" | 两份文档互相矛盾 | **必须拍板**（§2 给检索结论与推荐，停点 P-1） |
+| 安装器选型 | ~~Q8 台账 NSIS vs 推荐 Inno 矛盾~~ | — | ✅ **P-1 已批准（09-13 用户）：Inno Setup**；AUDIO-ENGINE §24 台账已同步 |
 | 产物目录 | GOAL-AUTONOMY §4 写 `dist-release/`；工作区 AGENTS.md 写 `release/<project>/<target>/`（本仓 `.gitignore` 第 13 行已忽略 `release/`） | 两个约定并存 | 生成在 `dist-release/`（**需向 `.gitignore` 新增该条目**，实测当前只有 `dist/`、`dist-host/`），交付副本放 `release/RhineLab-MusicPlayer/win/`（§5.1-6） |
 | `diag.get` | 协议 §5 标 M4 | 真核心 `host/core/src/main.cpp:432` 与 `devices.*`/`output.mode` 同分支回 `not_implemented`；但 underrun 计数器**已存在**（`host/core/src/audio.h:106`、`audio.cpp:219-223`） | 诊断页需要**只读**启用 `diag.get`（§3.4，协议 v1.5），不碰 M4 的写路径 |
 | `framesLost` | — | 桥已实现（`src/desktop-bridge.ts:111-116,222-228`），注释明写"**M6 诊断页复用**" | 现成，零改动 |
@@ -91,7 +91,7 @@ NSIS = 可用但 .NET 依赖检测/中文 UI/现代观感都要额外插件，�
 已有）。因此**它们不进 `THIRD-PARTY-NOTICES.md` 的产品依赖清单**，改为在 `docs/PACKAGING.md`
 的"构建工具"小节备案（§6.3）。构建期工具与分发依赖分开登记，避免把许可面搞混。
 
-**残余分歧**：Q8 台账字面是 NSIS。→ **停点 P-1**，用户点头后同步更新 `AUDIO-ENGINE.md` §24 台账行。
+**已定案（09-13 用户批准 P-1）**：Inno Setup（推荐 7.1.0，保守锁 6.7.3）；`AUDIO-ENGINE.md` §24 台账行已同步改注。
 
 ### 2.3 框架依赖 vs 自包含（同属打包选型，必须一起拍板）
 
@@ -374,7 +374,7 @@ M6 判定：**不迁移 TOML**，理由三条：
 
 | # | 停点 | 何时 | 交什么 |
 |---|---|---|---|
-| **P-1** | **安装器选型冲突**：Q8 台账字面 = NSIS，M5 v1 推荐 = Inno；本计划检索结论 = **Inno Setup**（§2.2） | M6c 开工前 | 对比表 + 一句话结论；点头后同步改 `AUDIO-ENGINE.md` §24 Q8 行 |
+| ~~P-1~~ | ✅ **已批准（09-13）：Inno Setup**；§24 台账已同步 | — | — |
 | **P-2** | **updater 渠道**（M6-Q1）：v1 不做（本地自用，GitHub Releases 手动更，留 `update.url` 占位）——需用户确认"确认不做" | M6b 收尾 | 三选项：不做 / GitHub Releases 手动 / 自建静态 JSON 清单（需服务器） |
 | **P-3** | **代码签名**：无证书 → SmartScreen"未知发布者"警告 + 部分杀软误报。是否接受？ | M6c | 选项：接受警告（写进 README）/ 购 OV 证书（花钱）/ 自签+用户装信任（仅自用可行） |
 | **P-4** | **push 新 origin / 发布 GitHub Release**：任何向远端推送（含新 remote、Release 附件上传）需用户显式点头；本仓库当前 remote 状态与推送策略不在计划内自动决定 | M6d/M6 收尾 | 待推清单（分支、tag、Release 资产） |
