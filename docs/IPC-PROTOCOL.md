@@ -1,6 +1,6 @@
-# IPC 协议契约 v1.4（壳 ↔ 音频核心 ↔ 前端桥）
+# IPC 协议契约 v1.5（壳 ↔ 音频核心 ↔ 前端桥）
 
-> 状态：v1.4 修订 2026-09-13（M5 前，library/lyric/封面主机）· 初稿 09-12 · 配套 `AUDIO-ENGINE.md` §1/§10（D2 路线，见 `DECISION-Q1-HOST.md` §7.6）
+> 状态：v1.5 修订 2026-09-14（M6 只读数据面）· 前版 v1.4（M5 library/lyric）· 配套 `AUDIO-ENGINE.md` §1/§10（D2 路线，见 `DECISION-Q1-HOST.md` §7.6）
 > 本文件是三方（WPF 壳、C++ 核心、TS 前端桥）的**唯一消息格式权威**；改协议必须改本文并升 `proto`。
 
 ## 1. 拓扑与传输
@@ -82,7 +82,8 @@ M0-M6 增量启用；未实现的 cmd 必须回 `err{code:"not_implemented"}`，
 | `engine.preload` / `cancel_preload` | `{track_id}` | `{accepted:bool, reason?}` | M2 |
 | `engine.queue` | `{items:[track_id...], head:int}` | `{queue_rev:int}` | M2 |
 | `spectrum.on` / `spectrum.off` | —（无参数） | `{enabled:boolean}` | M3（v1.3 启用） |
-| `devices.list` | — | `{devices:[{id,name,kind,default,exclusive:{rates:[{rate,bits...}],min_period_ms,mix_format}}]}` | M3 |
+| `devices.list` | — | `{devices:[{id,name,kind,default,capabilities:{rates:[{rate,bits...}],min_period_ms,mix_format}}]}`（**v1.5 只读面**：枚举+共享能力；exclusive 能力字段 M4 域返回 null） | M6 |
+| `library.quarantine` | `{limit?=100}` | `{items:[{path,reason,mtime,size,seen_at}]}`（v1.5，壳侧自答只读） | M6 |
 | `devices.select` | `{id, mode:auto/shared/exclusive}` | `{negotiated:{...}}`（§8） | M3 |
 | `output.mode` | `{mode, buffer_ms?, auto_expand_buffer?, buffer_max_ms?}` | `{negotiated}` | M4 |
 | `config.get` / `config.set` | `{path:"output.buffer_ms", value}` | `{value}`（生效值，可能被钳制） | M1 |
@@ -93,7 +94,7 @@ M0-M6 增量启用；未实现的 cmd 必须回 `err{code:"not_implemented"}`，
 | `library.stats` | — | `{albums,tracks,genres,roots,last_scan_ms,quarantine}` | M5 v1.4 |
 | `lyric.show` | `{primary:string, secondary?:string}`（前端歌词行上行；空串=清除） | `{delivered:bool}`（管道未启用时 false 不报错） | M5 v1.4（**壳侧自答**→任务栏 writer） |
 | `taskbar.set` | `{enabled:bool, pipe?:string}` | `{connected:boolean}` | M5 v1.4（壳侧自答） |
-| `diag.get` | — | `{underruns,reopens,fallback_history:[...],link:{...}}` | M4 |
+| `diag.get` | — | **v1.5 只读面（M6）**：`{underruns,reopens,buffer_ms_now,period_ms,link:<negotiated 同构>}`；`fallback_history` 属 M4 域返回 `null` | M6 |
 
 ### 5.1 TrackDto / AlbumDto（v1.4 定形，字段不多不少）
 
