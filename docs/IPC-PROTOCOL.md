@@ -1,6 +1,6 @@
-# IPC 协议契约 v1.3（壳 ↔ 音频核心 ↔ 前端桥）
+# IPC 协议契约 v1.4（壳 ↔ 音频核心 ↔ 前端桥）
 
-> 状态：v1.0 定稿 · 2026-09-12 · v1.3 修订 2026-09-13（M3）· 配套 `AUDIO-ENGINE.md` §1/§10（D2 路线，见 `DECISION-Q1-HOST.md` §7.6）
+> 状态：v1.4 修订 2026-09-13（M5 前，library/lyric/封面主机）· 初稿 09-12 · 配套 `AUDIO-ENGINE.md` §1/§10（D2 路线，见 `DECISION-Q1-HOST.md` §7.6）
 > 本文件是三方（WPF 壳、C++ 核心、TS 前端桥）的**唯一消息格式权威**；改协议必须改本文并升 `proto`。
 
 ## 1. 拓扑与传输
@@ -50,7 +50,7 @@ WebView 前端 ──(WebView2 postMessage / WebMessageReceived)── WPF 壳 �
 
 - 发起方为**连接建立方**（壳连核心；前端页面加载后向壳发）。
 ```json
-{"v":1,"t":"hello","role":"shell","proto":1,"caps":["cmd","evt.position","evt.state","smtc"],"app":"rhine-music-player","ver":"0.1.0"}
+{"v":1,"t":"hello","role":"shell","proto":1,"caps":["cmd","evt.position","evt.state","smtc","library"],"app":"rhine-music-player","ver":"0.1.0"}
 ```
 - 应答方回同构 `hello` 携带自身 `caps`。`proto` 双方取 `min`；`caps` 交集即本次会话能力。
 - **会话世代 `ep`（v1.2）**：核心每次 `hello` **成功应答**（即发出 core 角色 hello 帧）时自增进程内
@@ -86,9 +86,33 @@ M0-M6 增量启用；未实现的 cmd 必须回 `err{code:"not_implemented"}`，
 | `devices.select` | `{id, mode:auto/shared/exclusive}` | `{negotiated:{...}}`（§8） | M3 |
 | `output.mode` | `{mode, buffer_ms?, auto_expand_buffer?, buffer_max_ms?}` | `{negotiated}` | M4 |
 | `config.get` / `config.set` | `{path:"output.buffer_ms", value}` | `{value}`（生效值，可能被钳制） | M1 |
-| `library.scan` / `library.query` | （M5 定形，先占名） | | M5 |
-| `taskbar.set` | `{enabled, pipe?}` | `{connected:boolean}` | M5 |
+| `library.scan` | `{roots?:[path], full?:bool}`（缺省=config 根；full=忽略 mtime 增量） | `{scanned,added,updated,removed,failed,elapsed_ms}` | M5（v1.4 定形；**壳侧自答**，不经核心） |
+| `library.query` | `{q?, scope?:"tracks"\|"albums", filter?:{genre?,year?,artist?,album?}, sort?:"title"\|"artist"\|"album"\|"year"\|"duration"\|"added", offset?=0, limit?=200}` | `{total, items:[TrackDto\|AlbumDto]}`（形状见 §5.1） | M5 v1.4 |
+| `library.albums` | `{genre?, limit?}` | `{total, items:[AlbumDto]}` | M5 v1.4 |
+| `library.get` | `{id:int}` | `{TrackDto, album:AlbumDto, lyric_text:string\|null}` | M5 v1.4 |
+| `library.stats` | — | `{albums,tracks,genres,roots,last_scan_ms,quarantine}` | M5 v1.4 |
+| `lyric.show` | `{primary:string, secondary?:string}`（前端歌词行上行；空串=清除） | `{delivered:bool}`（管道未启用时 false 不报错） | M5 v1.4（**壳侧自答**→任务栏 writer） |
+| `taskbar.set` | `{enabled:bool, pipe?:string}` | `{connected:boolean}` | M5 v1.4（壳侧自答） |
 | `diag.get` | — | `{underruns,reopens,fallback_history:[...],link:{...}}` | M4 |
+
+### 5.1 TrackDto / AlbumDto（v1.4 定形，字段不多不少）
+
+```jsonc
+// TrackDto
+{ "id":12, "title":"…", "artist":"…", "album":"…", "genre":"World", "year":1999,
+  "track_no":1, "disc_no":1, "duration_ms":253000, "codec":"FLAC", "sample_rate":44100,
+  "bit_depth":24, "channels":2, "bitrate":900000, "cover_key":"sha1:…",
+  "lyric_state":"embedded|sidecar|none", "path":"C:\…" }
+// AlbumDto
+{ "album_key":"sha1:…", "title":"…", "artist":"…", "year":1999, "genre":"World",
+  "disc_count":1, "track_count":10, "duration_ms":2687000, "cover_key":"sha1:…",
+  "formats":["FLAC"], "bitrate_range":[258000,282000],
+  "resolution":{"lossy":false, "sample_rate":44100, "bit_depth":24} }
+```
+封面取回：`https://cover.rhine.local/<cover_key 冒号换横杠>.jpg|png`（WebView2 虚拟主机映射
+`%LOCALAPPDATA%\RhineMusic\covers`，壳侧 `SetVirtualHostNameToFolderMapping`，零 IPC 载荷）。
+`engine.play` 的 `track_id` 新增 **`lib:<track_id>`** 前缀：壳查 DB 解析为 `file:<绝对路径>` 后
+转发核心（核心 scheme 面零改动）；解析失败回 `bad_request{unknown lib id}`（壳侧产生）。
 
 ## 6. 事件 `evt`（`payload.kind` 选择）
 
@@ -100,6 +124,7 @@ M0-M6 增量启用；未实现的 cmd 必须回 `err{code:"not_implemented"}`，
 | `spectrum` | 30Hz（订阅开关 `spectrum.on/off`，§5；默认 off，无消费者不产出） | `{bands_l[64], bands_r[64], low, mid, high, activity, beat_phase}`（payload v1.3 定形，见下） |
 | `diag` | 计数变更/1Hz | `{underruns(+delta), buffer_ms_now, reopened, last_fallback}` |
 | `error` | 即时 | `{where, code, message, retryable, degraded_to?}` |
+| `library`（**壳侧产生**） | 扫描阶段（非周期；progress ≤1Hz） | `{phase:"start"\|"progress"\|"done", scanned, total, quarantine}` |
 | `log`（壳侧） | — | 不转发前端，仅进环形缓冲与日志文件 |
 
 - **spectrum payload 定形（v1.3 / M3）**：
@@ -132,6 +157,8 @@ M0-M6 增量启用；未实现的 cmd 必须回 `err{code:"not_implemented"}`，
 | `device_gone` | 设备拔出/默认变更竞态 | 是（自动迁移后重试） |
 | `decode_failed` | 解码器打开/读取失败（附 `track_id`） | 是（跳曲策略见 AUDIO-ENGINE §14） |
 | `stream_restart` | 需重开流（采样率切换），**信息性** | 自动处理 |
+| `library_busy` | 扫描进行中收到写类库命令 | 是 |
+| `library_unavailable` | DB 打不开/损坏（UI 提示重建） | 否 |
 | `internal` | 未分类核心异常 | 视上下文 |
 
 ## 8. `negotiated` 对象（协商事实，单一事实源）
