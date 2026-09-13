@@ -31,3 +31,5 @@ host/**/bin/
 host/**/obj/
 dist-host/
 host/core/build/
+dist/
+dist-release/
