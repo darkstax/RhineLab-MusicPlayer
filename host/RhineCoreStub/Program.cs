@@ -15,7 +15,7 @@ namespace RhineCoreStub;
 ///
 /// 协议纪律：**不得自加字段**。任何新增消息或字段都必须先改协议文档。
 /// 命令行：<c>RhineCoreStub [--pipe &lt;name&gt;] [--kill-after &lt;sec&gt;] [--halt-events &lt;sec&gt;]
-///            [--trace &lt;file&gt;] [--verbose]</c>
+///            [--trace &lt;file&gt;] [--verbose] [--no-spectrum]</c>
 /// 环境变量：<c>RHINE_CORE_PIPE</c>（协议 §1 的 core.pipe 覆盖项）、<c>RHINE_STUB_STATE_FILE</c>
 /// （配置持久化落点覆盖，验收用）。
 /// 退出码：0 = 有序退出（收到 bye 或 stdin exit/bye）；3 = 已有核心实例占用管道；
@@ -41,6 +41,8 @@ internal static class Program
         "engine.toggle",
         "engine.seek",
         "engine.volume",
+        // M3（协议 v1.3）：假谱与真核心同形（正弦+噪声，参数见 docs/M3-FINDINGS.md）。
+        "spectrum",
     ];
 
     private static readonly CancellationTokenSource Shutdown = new();
@@ -48,6 +50,11 @@ internal static class Program
 
     private static readonly Random Jitter = new();
     private static readonly Stopwatch Uptime = Stopwatch.StartNew();
+
+    /// <summary>M3 假谱：订阅开关（cmd spectrum.on/off，协议 §5/§6 v1.3，默认 off）。
+    /// 与真核心同形 payload（bands 各 64、4 位小数），但数值是合成正弦+噪声，不代表真音频。</summary>
+    private static volatile bool _spectrumOn;
+    private static bool _spectrumDisabled;
 
     private static bool _verbose;
     private static long _sequence;
@@ -88,6 +95,9 @@ internal static class Program
         }
 
         _verbose = args.Contains("--verbose");
+        // E2E 隔离钩子：--no-spectrum 时假谱完全不可订阅（回 not_implemented），
+        // 供 m1-scenario 等旧用例保持纯净帧序。
+        _spectrumDisabled = args.Contains("--no-spectrum");
 
         var pipe = ArgValue(args, "--pipe")
             ?? Environment.GetEnvironmentVariable("RHINE_CORE_PIPE")
@@ -264,6 +274,7 @@ internal static class Program
         }
 
         var events = PublishEvents(send);
+        var spectrum = PublishSpectrum(send);
         var outcome = SessionOutcome.Closed;
         try
         {
@@ -285,6 +296,15 @@ internal static class Program
             try
             {
                 await events.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // expected on session end
+            }
+
+            try
+            {
+                await spectrum.ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -530,6 +550,14 @@ internal static class Program
             case "engine.preload" or "engine.cancel_preload" or "engine.queue" or "config.get" or "config.set"
                 or "library.scan" or "library.query" or "taskbar.set":
                 throw new EngineNotImplemented($"cmd '{cmd}' is not implemented by this M1 stub");
+            // 协议 §5/§6 v1.3（M3）：假谱订阅开关（与真核心同构 result）。
+            case "spectrum.on" or "spectrum.off":
+            {
+                if (_spectrumDisabled)
+                    throw new EngineNotImplemented($"cmd '{cmd}' is disabled by --no-spectrum");
+                _spectrumOn = cmd == "spectrum.on";
+                return (new Dictionary<string, object?> { ["enabled"] = _spectrumOn }, []);
+            }
             default:
                 throw new EngineNotImplemented($"cmd '{cmd}' is not implemented by this stub");
         }
@@ -582,6 +610,8 @@ internal static class Program
         long l => JsonValue.Create(l),
         double d => JsonValue.Create(d),
         List<string> list => new JsonArray(list.Select(s => (JsonNode)JsonValue.Create(s)!).ToArray()),
+        // M3 假谱：bands 数组（64 个 0..1 数值，协议 §6 v1.3）。
+        List<double> numbers => new JsonArray(numbers.Select(d => (JsonNode)JsonValue.Create(d)!).ToArray()),
         IReadOnlyDictionary<string, object?> map => AsObject(map),
         _ => throw new InvalidOperationException($"unsupported result type {value.GetType().Name}"),
     };
@@ -600,6 +630,72 @@ internal static class Program
                 await Emit(send, engineEvent).ConfigureAwait(false);
             }
         }
+    }
+
+    /// <summary>
+    /// M3 假谱的 30Hz 发布（协议 §6 v1.3）：仅 spectrum.on 后发帧，off 立即停发；
+    /// 与 1Hz tick 共用 <see cref="Emit"/>（seq 同一条进程内单调线、写入经 WriteGate 串行）。
+    /// </summary>
+    private static async Task PublishSpectrum(PipeSink send)
+    {
+        var period = TimeSpan.FromMilliseconds(33);
+        var next = DateTime.UtcNow + period;
+        while (!Shutdown.IsCancellationRequested)
+        {
+            await Task.Delay(next - DateTime.UtcNow, Shutdown.Token).ConfigureAwait(false);
+            next += period;
+            if (DateTime.UtcNow - next > TimeSpan.FromMilliseconds(200)) next = DateTime.UtcNow + period;
+            if (!_spectrumOn) continue;
+            await Emit(send, new EngineEvent("spectrum", FakeSpectrumPayload())).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// 假谱 payload（与真核心 AnalyzeFrame 同形：bands_l/bands_r 各 64、4 位小数、
+    /// low/mid/high/activity/beat_phase）——合成参数见 docs/M3-FINDINGS.md §3：
+    /// 1.7Hz 上行宽波 + 逐带相位差（L/R 错相 0.6 rad）+ ±0.03 页内噪声 + 高频轻微衰减，
+    /// beat_phase = (uptime × 2Hz) mod 1。仅用于无真核心时演示链路，不代表音频事实。
+    /// </summary>
+    private static IReadOnlyDictionary<string, object?> FakeSpectrumPayload()
+    {
+        const int bands = 64;
+        var t = Uptime.Elapsed.TotalSeconds;
+        var left = new double[bands];
+        var right = new double[bands];
+        double Q(double v) => Math.Round(Math.Clamp(v, 0d, 1d), 4, MidpointRounding.AwayFromZero);
+        for (var i = 0; i < bands; i++)
+        {
+            var weight = 1.0 / (1.0 + i * 0.03);
+            var sweep = Math.Max(0.0, Math.Sin(2 * Math.PI * 1.7 * t - i * 0.18));
+            left[i] = Q(0.10 + 0.55 * sweep * weight + (Random.Shared.NextDouble() - 0.5) * 0.06);
+            right[i] = Q(0.10 + 0.55 * Math.Max(0.0, Math.Sin(2 * Math.PI * 1.7 * t - i * 0.18 + 0.6)) * weight +
+                         (Random.Shared.NextDouble() - 0.5) * 0.06);
+        }
+
+        double Rms(int from, int to)
+        {
+            var sum = 0.0;
+            for (var i = from; i < to; i++)
+            {
+                var mean = (left[i] + right[i]) / 2;
+                sum += mean * mean;
+            }
+
+            return Q(Math.Sqrt(sum / (to - from)));
+        }
+
+        var activity = 0.0;
+        for (var i = 0; i < bands; i++) activity += (left[i] + right[i]) / 2;
+        return new Dictionary<string, object?>
+        {
+            ["bands_l"] = left.Select(Q).ToList(),
+            ["bands_r"] = right.Select(Q).ToList(),
+            ["low"] = Rms(0, 8),
+            ["mid"] = Rms(8, 32),
+            ["high"] = Rms(32, bands),
+            ["activity"] = Q(activity / bands),
+            ["beat_phase"] = Q(t * 2.0 % 1.0),
+        };
     }
 
     /// <summary>统一出口：seq 进程内单调（§6）、ep 会话世代（v1.2）、halt 窗口内只烧 seq 不发帧。</summary>
@@ -627,10 +723,12 @@ internal static class Program
         if (_verbose) Log("debug", $"evt {engineEvent.Kind} seq={seq} ep={Epoch}");
     }
 
-    /// <summary>trace 行不是协议帧：一行一条，只含 kind + seq + data（验收 2 的位置推进证据）。</summary>
+    /// <summary>trace 行不是协议帧：一行一条，只含 kind + seq + data（验收 2 的位置推进证据）。
+    /// M3：spectrum 是 30Hz 高频数据帧，不进 trace（防证据文件膨胀；冒烟断言直接读管道帧）。</summary>
     private static void Trace(long seq, EngineEvent engineEvent)
     {
         if (_trace is null) return;
+        if (engineEvent.Kind == "spectrum") return;
         try
         {
             var data = AsObject(engineEvent.Data);

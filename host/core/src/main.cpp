@@ -33,10 +33,10 @@ constexpr const char* kDefaultPipe = "rhine-music.core.v1";  // 不含 \\.\pipe\
 constexpr int kProto = 1;
 
 // 协议 §5 的 M2 核心声明能力（caps 只声明已实现项；桩含 echo 属 M0 遗留测试面，
-// 真核心不实现，被调用回 not_implemented）。
+// 真核心不实现，被调用回 not_implemented）。M3：+spectrum（§5 spectrum.on/off、§6 evt 定形）。
 const char* kCaps[] = {
     "engine.state", "engine.play", "engine.pause",  "engine.resume", "engine.stop",
-    "engine.toggle", "engine.seek", "engine.volume",
+    "engine.toggle", "engine.seek", "engine.volume", "spectrum",
 };
 
 std::atomic<HANDLE> g_stopEvent{nullptr};
@@ -267,10 +267,12 @@ private:
                 TickOnce();
                 nextTick = now + std::chrono::seconds(1);
             }
+            MaybeEmitSpectrum(now);
             if (io_.HasBufferedLine()) {
                 return io_.ReadLine(outLine);
             }
-            io_.WaitReadable(50);
+            // 订阅期内用更短等待片保证 30Hz 节拍（协议 §6）；未订阅维持 50ms 原节奏。
+            io_.WaitReadable(audio_.spectrum().enabled() ? 10 : 50);
             // WaitReadable 返回后无论有无数据都回到循环顶（重查 shutdown / tick）。
             // 若管道已断开，ReadLine 将在下一次进入时返回 false —— 这里显式探测：
             DWORD avail = 0;
@@ -282,6 +284,22 @@ private:
             }
             if (g_shutdown.load(std::memory_order_relaxed)) return false;
         }
+    }
+
+    // M3：频谱 30Hz 节拍（会话线程内串行发射，不加新线程/写互斥量——红线 A1 的另一半：
+    // 聚合全在此线程，回调侧只 memcpy）。订阅开启才有帧；会话结束即停订阅。
+    void MaybeEmitSpectrum(std::chrono::steady_clock::time_point now) {
+        if (!audio_.spectrum().enabled()) {
+            nextSpectrum_ = now;  // 关闭时追平，重开后立即有帧
+            return;
+        }
+        if (now < nextSpectrum_) return;
+        // 追赶保护：管道卡顿时不积帧——落后超 200ms（≈6 帧）则丢弃到期节拍，
+        // 从当前时间重建节奏（接收端看到的是帧间隔变长，而非突发补发）。
+        const auto period = std::chrono::milliseconds(33);  // 30Hz
+        if (now - nextSpectrum_ > std::chrono::milliseconds(200)) nextSpectrum_ = now;
+        nextSpectrum_ += period;
+        Emit("spectrum", audio_.spectrum().AnalyzeFrame());
     }
 
     void TickOnce() {
@@ -404,6 +422,13 @@ private:
                 // §5：M2 占名未定形（gapless/预加载的边界队列在 M2b/M5 落地）。
                 throw rhine::NotImplemented{"cmd '" + cmd +
                                             "' is not implemented by this M2 core"};
+            } else if (cmd == "spectrum.on" || cmd == "spectrum.off") {
+                // 协议 §5/§6 v1.3（M3）：订阅开关，默认 off；result {enabled}。
+                // 开启时复位聚合侧（避免历史弹簧/EMA 状态泄漏到新会话），无参数。
+                const bool on = cmd == "spectrum.on";
+                if (on && !audio_.spectrum().enabled()) audio_.spectrum().Reset();
+                audio_.spectrum().SetEnabled(on);
+                outcome.result = Json{{"enabled", on}};
             } else if (cmd == "devices.list" || cmd == "devices.select" || cmd == "output.mode" ||
                        cmd == "diag.get") {
                 // M3/M4 域（任务书裁定 M4 排除；devices/diag 属 M3+）。
@@ -479,6 +504,7 @@ private:
     std::atomic<std::int64_t>& epoch_;
     bool orderly_ = false;
     bool verbose_ = false;
+    std::chrono::steady_clock::time_point nextSpectrum_{};
 };
 
 std::wstring GetEnvWide(const wchar_t* name) {

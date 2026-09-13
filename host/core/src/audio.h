@@ -25,6 +25,7 @@
 #include "miniaudio.h"
 #include "protocol.h"
 #include "ring.h"
+#include "spectrum.h"
 
 namespace rhine {
 
@@ -104,6 +105,10 @@ public:
 
     std::uint64_t underruns() const { return underrunCount_.load(std::memory_order_relaxed); }
 
+    // ---- 频谱 tap（M3）：只读分接，回调侧零分配；订阅开关/事件由会话线程操作 ----
+    SpectrumTap& spectrum() { return spectrum_; }
+    const SpectrumTap& spectrum() const { return spectrum_; }
+
 private:
     void Callback(void* pOutput, ma_uint32 frameCount);
     static void StaticCallback(ma_device* device, void* pOutput, const void* pInput,
@@ -154,6 +159,8 @@ private:
 
     // 回调专用暂存（预分配，满足「回调零分配」）。
     std::vector<std::int32_t> popScratch_;
+
+    SpectrumTap spectrum_;  // 预分配环形槽位；回调只 memcpy+atomic（红线 A1）
 
     std::vector<ma_int32> chunkS32_;  // 解码线程暂存（OpenTrack 分配，线程内复用）
     static constexpr ma_uint64 kChunkFrames = 1024;

@@ -225,6 +225,8 @@ void AudioBackend::Callback(void* pOutput, ma_uint32 frameCount) {
     firedFrames_.fetch_add(want, std::memory_order_relaxed);
     if (got > 0) {
         playedFrames_.fetch_add(got, std::memory_order_acq_rel);
+        // M3 频谱 tap：只读分接已弹出的帧（memcpy 进预分配滑窗；未订阅时零开销直返）。
+        spectrum_.PushFromCallback(scratch, got, deviceFacts_.appRate);
     }
 
     const float gain = softwareGain_.load(std::memory_order_relaxed);

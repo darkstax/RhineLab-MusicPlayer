@@ -19,6 +19,7 @@ add_executable(RhineCore
   src/engine.cpp
   src/audio.cpp
   src/ring.cpp
+  src/spectrum.cpp   # M3 频谱 tap（FFT/聚合在会话线程；回调侧只 memcpy）
   src/miniaudio_impl.cpp   # MINIAUDIO_IMPLEMENTATION 单独成 TU（增量编译友好）
 )
 
