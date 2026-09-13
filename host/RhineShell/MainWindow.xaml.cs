@@ -6,6 +6,7 @@ using System.Windows.Threading;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 using RhineShell.Hosting;
+using RhineShell.Smtc;
 
 namespace RhineShell;
 
@@ -23,6 +24,7 @@ public partial class MainWindow : Window
     private readonly TextBlock _fallback = new();
     private ShellChannel? _channel;
     private Bridge? _bridge;
+    private SmtcManager? _smtc;
     private System.Diagnostics.Process? _ownedCore;
 
     public MainWindow(ShellOptions options)
@@ -97,6 +99,7 @@ public partial class MainWindow : Window
                 _bridge = new Bridge(_channel, frame =>
                     _view.CoreWebView2.PostWebMessageAsJson(frame.ToJsonString(RhineShared.IpcFrame.Json)));
                 Bridge.Attach(_view, _bridge);
+                RegisterSmtc();
             }
 
             _view.CoreWebView2.NavigationCompleted += (_, args) =>
@@ -129,6 +132,36 @@ public partial class MainWindow : Window
         {
             ShowFatal("WebView2 初始化失败", ex.Message);
         }
+    }
+
+    /// <summary>
+    /// 任务书 M3 范围 B：SMTC 注册。优先级：<c>--no-smtc</c>（E2E 隔离）&gt; config
+    /// <c>smtc.enabled</c>（缺省 true，关闭时不注册）；注册失败在 SmtcManager 内部
+    /// catch 降级记日志，UI 零影响（B2）。WPF 窗口句柄经 WindowInteropHelper 取
+    /// （OnLoaded 时必已就绪），交给 GetForWindow 的桌面入口——见 SmtcManager 注释。
+    /// </summary>
+    private void RegisterSmtc()
+    {
+        if (_options.NoSmtc)
+        {
+            Log.Info("smtc skipped by --no-smtc");
+            return;
+        }
+
+        if (_channel is null || _bridge is null)
+        {
+            Log.Info("smtc skipped (no core channel)");
+            return;
+        }
+
+        var enabled = ConfigStore.Get("smtc.enabled");
+        if (enabled?.GetValueKind() == System.Text.Json.JsonValueKind.False)
+        {
+            Log.Info("smtc disabled by config smtc.enabled=false");
+            return;
+        }
+
+        _smtc = SmtcManager.TryCreate(_channel, _bridge, new System.Windows.Interop.WindowInteropHelper(this).Handle);
     }
 
     /// <summary>
@@ -167,6 +200,8 @@ public partial class MainWindow : Window
     private async void OnClosed(object? sender, EventArgs e)
     {
         _bridge?.Detach();
+        _smtc?.Dispose();
+        _smtc = null;
         if (_channel is not null)
         {
             await _channel.ShutdownAsync("shell-window-closed");

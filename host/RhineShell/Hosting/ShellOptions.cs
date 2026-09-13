@@ -41,8 +41,13 @@ public sealed class ShellOptions
     /// 供无人值守取证（keep_awake/丢帧检测）；长期保留为诊断能力（M6 诊断页同源）。</summary>
     public int RemoteDebugPort { get; init; }
 
+    /// <summary>任务书 M3 范围 B4：<c>--no-smtc</c> 禁用系统媒体卡（E2E 隔离用：
+    /// 冒烟/飞屏验证需要无 SMTC 的纯净壳实例）。配置键 <c>smtc.enabled</c> 同样控制，
+    /// 命令行参数优先级高于配置。</summary>
+    public bool NoSmtc { get; init; }
+
     public string Describe() =>
-        $"dist=\"{DistDirectory}\" pipe=\"{PipeName}\" coreDisabled={CoreDisabled} devtools={OpenDevTools} dev={Dev} cdp={RemoteDebugPort} coreExe={(CoreExe ?? "(stub)")}";
+        $"dist=\"{DistDirectory}\" pipe=\"{PipeName}\" coreDisabled={CoreDisabled} devtools={OpenDevTools} dev={Dev} cdp={RemoteDebugPort} coreExe={(CoreExe ?? "(stub)")} noSmtc={NoSmtc}";
 
     public static ShellOptions FromCommandLine(string[] args)
     {
@@ -63,6 +68,7 @@ public sealed class ShellOptions
             RemoteDebugPort = int.TryParse(Value(args, "--remote-debug-port"), out var port) && port is > 0 and < 65536
                 ? port
                 : 0,
+            NoSmtc = args.Contains("--no-smtc"),
         };
     }
 

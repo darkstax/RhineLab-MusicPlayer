@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows;
 using RhineShell.Hosting;
@@ -14,11 +15,31 @@ public partial class App : Application
     /// <summary>单实例互斥体名（本机命名空间，不跨会话）。</summary>
     private const string InstanceMutex = @"Local\RhineShell.SingleInstance";
 
+    /// <summary>
+    /// 显式进程 AppUserModelID（M3 验收发现）：不设时本进程 SMTC 会话的
+    /// SourceAppUserModelId 落到 WebView2 宿主默认值 "MSEdge"（smtc-check.ps1 实测），
+    /// 无法归属本应用；设后 SMTC/任务栏/通知归属统一。
+    /// </summary>
+    private const string AppUserModelId = "RhineMusic.RhineShell";
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern int SetCurrentProcessExplicitAppUserModelID(string AppID);
+
     private Mutex? _mutex;
     private ShellOptions _options = ShellOptions.FromCommandLine([]);
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        try
+        {
+            var hr = SetCurrentProcessExplicitAppUserModelID(AppUserModelId);
+            Log.Info($"aumid set hr=0x{hr:X8} id={AppUserModelId}");
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"aumid set failed: {ex.Message}"); // 不阻断启动：SMTC 归属退化为 MSEdge
+        }
+
         _options = ShellOptions.FromCommandLine(e.Args);
         if (!TryAcquireInstanceMutex(InstanceMutex, out _mutex))
         {

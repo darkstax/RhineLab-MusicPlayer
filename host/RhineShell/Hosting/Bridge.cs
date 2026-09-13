@@ -35,6 +35,13 @@ public sealed class Bridge
 
     public void Detach() => _channel.FrameReceived -= OnCoreFrame;
 
+    /// <summary>
+    /// 核心帧观察接入口（M3 SMTC 接入点；UI 线程调度）。与转发前端同一条路径、
+    /// 同一帧实例：壳侧消费者（SMTC）不另开事件解析旁路；处理器异常被捕获，
+    /// 不影响转发。
+    /// </summary>
+    public event Action<JsonObject>? CoreFrameObserved;
+
     /// <summary>页面加载完成：先补 hello，再重放最新 state 快照（协议 §9）。</summary>
     public void ReplayToFrontend()
     {
@@ -47,7 +54,21 @@ public sealed class Bridge
 
     /// <summary>核心推送 → 前端。握手帧与事件帧统一走这条路。</summary>
     private void OnCoreFrame(JsonObject frame) =>
-        _dispatcher.InvokeAsync(() => Post(frame)).Task.ContinueWith(
+        _dispatcher.InvokeAsync(() =>
+        {
+            Post(frame);
+            if (CoreFrameObserved is { } observed)
+            {
+                try
+                {
+                    observed(frame);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn($"core frame observer failed: {ex.GetType().Name}: {ex.Message}");
+                }
+            }
+        }).Task.ContinueWith(
             task => Log.Warn($"post to frontend failed: {task.Exception?.GetBaseException().Message}"),
             TaskContinuationOptions.OnlyOnFaulted);
 
