@@ -25,6 +25,7 @@ public partial class MainWindow : Window
     private ShellChannel? _channel;
     private Bridge? _bridge;
     private SmtcManager? _smtc;
+    private RhineShell.Taskbar.TaskbarWriter? _taskbar;
     private System.Diagnostics.Process? _ownedCore;
 
     public MainWindow(ShellOptions options)
@@ -100,6 +101,8 @@ public partial class MainWindow : Window
                     _view.CoreWebView2.PostWebMessageAsJson(frame.ToJsonString(RhineShared.IpcFrame.Json)));
                 Bridge.Attach(_view, _bridge);
                 RegisterSmtc();
+                // M5c：任务栏歌词 writer（config taskbar.source==player 才接管；纯订阅式接线）。
+                _taskbar = RhineShell.Taskbar.TaskbarWiring.Install(_bridge);
             }
 
             _view.CoreWebView2.NavigationCompleted += (_, args) =>
@@ -202,6 +205,8 @@ public partial class MainWindow : Window
         _bridge?.Detach();
         _smtc?.Dispose();
         _smtc = null;
+        _taskbar?.Dispose();
+        _taskbar = null;
         if (_channel is not null)
         {
             await _channel.ShutdownAsync("shell-window-closed");

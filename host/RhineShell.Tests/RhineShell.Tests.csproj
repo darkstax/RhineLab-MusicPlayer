@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <IsPackable>false</IsPackable>
+    <AssemblyName>RhineShell.Tests</AssemblyName>
+    <RootNamespace>RhineShell.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    与 RhineCoreTests 同套路：TaskbarWriter 是纯逻辑（System.IO.Pipes/Text/Json），
+    直接 Link 源文件进测试工程——不引用 WPF exe 工程（测试宿主不加载 WPF，
+    dotnet test 在 WSL 可直跑 = GOAL-AUTONOMY D 快车道）。
+    TaskbarWiring（Bridge/Config 接线胶水）不测，由主进程真机冒烟覆盖。
+    版本组合照抄 RhineCoreTests（xunit 2.9.2 + runner 2.8.2：实测可跑；
+    runner 3.1.1 是 xunit v3 专用，与 v2 不配——挂起教训）。
+  -->
+  <ItemGroup>
+    <Compile Include="..\RhineShell\Taskbar\TaskbarWriter.cs" Link="TaskbarWriter.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+</Project>
