@@ -1,6 +1,6 @@
-# IPC 协议契约 v1.2（壳 ↔ 音频核心 ↔ 前端桥）
+# IPC 协议契约 v1.3（壳 ↔ 音频核心 ↔ 前端桥）
 
-> 状态：v1.0 定稿 · 2026-09-12 · 配套 `AUDIO-ENGINE.md` §1/§10（D2 路线，见 `DECISION-Q1-HOST.md` §7.6）
+> 状态：v1.0 定稿 · 2026-09-12 · v1.3 修订 2026-09-13（M3）· 配套 `AUDIO-ENGINE.md` §1/§10（D2 路线，见 `DECISION-Q1-HOST.md` §7.6）
 > 本文件是三方（WPF 壳、C++ 核心、TS 前端桥）的**唯一消息格式权威**；改协议必须改本文并升 `proto`。
 
 ## 1. 拓扑与传输
@@ -81,6 +81,7 @@ M0-M6 增量启用；未实现的 cmd 必须回 `err{code:"not_implemented"}`，
 | `config.set` 持久化 | 壳侧写 `%APPDATA%\RhineMusic\config.json`（dot-path 键；M2 起迁移 TOML schema，键名不变） | | M1 |
 | `engine.preload` / `cancel_preload` | `{track_id}` | `{accepted:bool, reason?}` | M2 |
 | `engine.queue` | `{items:[track_id...], head:int}` | `{queue_rev:int}` | M2 |
+| `spectrum.on` / `spectrum.off` | —（无参数） | `{enabled:boolean}` | M3（v1.3 启用） |
 | `devices.list` | — | `{devices:[{id,name,kind,default,exclusive:{rates:[{rate,bits...}],min_period_ms,mix_format}}]}` | M3 |
 | `devices.select` | `{id, mode:auto/shared/exclusive}` | `{negotiated:{...}}`（§8） | M3 |
 | `output.mode` | `{mode, buffer_ms?, auto_expand_buffer?, buffer_max_ms?}` | `{negotiated}` | M4 |
@@ -96,11 +97,23 @@ M0-M6 增量启用；未实现的 cmd 必须回 `err{code:"not_implemented"}`，
 | `state` | 变更即发 | `{state:idle/playing/paused/stopped, track_id?, position_ms?, duration_ms?, volume?, negotiated, badges:{exclusive,bit_perfect,app_perfect,factors:[]}}`（M1 桩允许 negotiated/badges 为 `null`=引擎未接入） |
 | `position` | 1Hz + 状态变更时 | `{position_ms, frames, rate, buffered_ms, drift_ms}` |
 | `transition` | 无缝切曲时 | `{old_id, new_id, at_frames, at_ms}` |
-| `spectrum` | 30Hz（可订阅开关 `spectrum.on/off`） | `{bands_l[64], bands_r[64], low, mid, high, activity, beat_phase}`（float 归一 0..1；上游 `MusicBands` 直接消费） |
+| `spectrum` | 30Hz（订阅开关 `spectrum.on/off`，§5；默认 off，无消费者不产出） | `{bands_l[64], bands_r[64], low, mid, high, activity, beat_phase}`（payload v1.3 定形，见下） |
 | `diag` | 计数变更/1Hz | `{underruns(+delta), buffer_ms_now, reopened, last_fallback}` |
 | `error` | 即时 | `{where, code, message, retryable, degraded_to?}` |
 | `log`（壳侧） | — | 不转发前端，仅进环形缓冲与日志文件 |
 
+- **spectrum payload 定形（v1.3 / M3）**：
+  - `bands_l` / `bands_r`：各 64 个 float，0..1 归一（对数 64 带，60Hz..min(16kHz, Nyquist)；
+    核心侧 FFT 1024/Hann + 主 bin 相位谱，规格移植 musicfox `spectrum.go`，见 AUDIO-ENGINE §10）；
+    数值统一保留 4 位小数（控制帧体积 ≈1KB/帧、30Hz）；
+  - `low` / `mid` / `high`：64 带聚合（对前端 `MusicBands` 语义）：`low`=带 0–7、`mid`=8–31、
+    `high`=32–63 的 RMS（L/R 均值的带组合），0..1；
+  - `activity`：全 64 带均值（0..1），上游用于呼吸淡出判定；
+  - `beat_phase`：低频包络相位 0..1——0 = 准拍点（低频包络上升沿刚触发），随时间向 1 推进，
+    下一次上升沿复位；超过两倍平均击间隔无新触发则冻结在 1（简化包络检测，非严格 BPM）。
+  - 频率纪律：`spectrum.on` 后核心以 30Hz（±5Hz）连续发帧；`spectrum.off` 或无活动连接即停发。
+    非 playing（无新音频）时 target 回落，帧仍按 30Hz 发出直至全零后保持发零帧（订阅期内频率恒定，
+    接收端无需超时推断）。实现侧细节（桩假谱参数、核心 tap 线程模型）见 `docs/M3-FINDINGS.md`。
 - **position 权威源是设备时钟**（AUDIO-ENGINE §9）；UI 本地外推，收广播偏差 >40ms 起 200ms 平滑收敛。
 - 事件是**可丢的**（`evt` 带 `seq`，丢帧可检测）；`state` 例外：壳/核心对 `state` 做可靠合并（后值覆盖，断线重连必补发最新快照）。
 - **v1.2**：核心发出的每一帧 `evt` 顶层携带可选 `ep`（会话世代，§4）。接收侧丢帧检测规则：
@@ -159,3 +172,6 @@ M0-M6 增量启用；未实现的 cmd 必须回 `err{code:"not_implemented"}`，
 - v1.2（2026-09-12，M1）：§4/§6 新增会话世代 `ep`（核心 hello 应答自增并随全部 `evt` 携带）；
   §6 明确接收侧丢帧检测规则（`ep` 变化复位 seq 基线，吸收 P1-B 的跨生命周期 seq 倒退语义）。
   帧语法向后兼容，旧接收方忽略 `ep` 即可，proto 仍为 1。
+- v1.3（2026-09-13，M3）：§5 启用 `spectrum.on/off`（result `{enabled}`，默认 off）；§6 spectrum 行
+  payload 定形（bands_l/bands_r 各 64 float 四位小数、low/mid/high 聚合带界、activity、beat_phase
+  语义）；核心侧 `spectrum` 声明进 caps（真核心与桩同步）。帧语法向后兼容，proto 仍为 1。
