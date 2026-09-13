@@ -2,14 +2,54 @@
  * M1 全局入口（任务书 C3）：挂底部播放条；M3 追加频谱桥（桌面环境下才接线）。
  * Wallpaper Engine 构建不挂播放条（其工作台另有媒体信息区），但频谱桥在 WE 下负责
  * 把桌面核心谱数据喂进上游 `window.rhineWallpaperSpectrum` 律动通道（shell 宿主内）。
+ *
+ * M5b 追加：歌词面板接线——订阅 playerStore（position 驱动滚动、track 变化时经
+ * `library.get` 取 lyric_text、stop 清除任务栏上行）；web 模式全部静默降级。
  */
 import "./player/player.css";
+import "./player/lyrics/lyric-view.css";
 import { bridge } from "./desktop-bridge";
 import { mountPlayerBar } from "./player/player-bar";
+import { playerStore } from "./player/player-store";
 import { spectrumBridge } from "./player/spectrum-bridge";
+import { lyricView } from "./player/lyrics/lyric-view";
 
 if (bridge.desktop) {
   spectrumBridge.start();
+}
+
+/** 协议 v1.4 §5：engine.play 的 lib:<track_id> 前缀 → library.get 数字 id。其它来源无库条目。 */
+function loadLyric(trackId: string | null): void {
+  const match = trackId ? /^lib:(\d+)$/.exec(trackId) : null;
+  if (!match) {
+    lyricView.setText(null);
+    return;
+  }
+  bridge
+    .call("library.get", { id: Number(match[1]) })
+    .then((result) => {
+      const text = (result as { lyric_text?: unknown } | null)?.lyric_text;
+      lyricView.setText(typeof text === "string" ? text : null);
+    })
+    .catch(() => lyricView.setText(null)); // 壳未就绪/查询失败：空态，不打断播放
+}
+
+function mountLyricWiring(): void {
+  let lastTrackId: string | null | undefined;
+  let lastState = playerStore.state.state;
+  playerStore.subscribe((snapshot) => {
+    if (snapshot.trackId !== lastTrackId) {
+      lastTrackId = snapshot.trackId;
+      loadLyric(snapshot.trackId);
+    }
+    // 只在停止/待机是**转移**发生时清除（1Hz ticker 反复 emit 同状态不得重复 clear）。
+    if (snapshot.state !== lastState) {
+      if (snapshot.state === "stopped" || snapshot.state === "idle") lyricView.clear();
+      lastState = snapshot.state;
+    }
+    // 位置无条件送（setPosition 自带行/内容去重；paused 时 seek 也能刷新当前行）。
+    lyricView.setPosition(snapshot.positionMs);
+  });
 }
 
 if (import.meta.env.MODE !== "wallpaper") {
@@ -18,6 +58,7 @@ if (import.meta.env.MODE !== "wallpaper") {
     if (host && !host.dataset.mounted) {
       host.dataset.mounted = "1";
       mountPlayerBar(host);
+      mountLyricWiring();
     }
   };
 

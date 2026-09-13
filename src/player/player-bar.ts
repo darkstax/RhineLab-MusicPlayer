@@ -2,6 +2,7 @@ import { createRollingText } from "@kitlangton/rolling-number";
 import { playerStore, type PlayerSnapshot } from "./player-store";
 import { spectrumBridge } from "./spectrum-bridge";
 import { FidelityBadges } from "./FidelityBadges";
+import { lyricView } from "./lyrics/lyric-view";
 
 /**
  * 底部最小播放条（任务书 M1 范围 C3）：
@@ -213,6 +214,9 @@ export function mountPlayerBar(root: HTMLElement): () => void {
 
   toggleEl.addEventListener("click", () => void playerStore.toggle());
   stopEl.addEventListener("click", () => void playerStore.stop());
+
+  // M5b：歌词展开按钮（样式在 lyrics/lyric-view.css，不动 player.css；面板状态由 lyricView 回调同步）。
+  lyricView.attachButtonTo(root.querySelector<HTMLElement>(".pb-controls")!);
 
   volumeInput.addEventListener("input", () => {
     if (suppressVolumeEvent) return;

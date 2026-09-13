@@ -1,0 +1,178 @@
+/**
+ * 歌词面板样式（M5b 泳道 B）：只用 --theme-* 变量（theme-ui.ts 注入，亮暗自动跟随），
+ * 延续上游工作台/详情面板的视觉语言（细线、近黑/暖灰、backdrop blur、竖线刻度），
+ * 不依赖 scene、不新增颜色字面量（fallback 除外）。
+ */
+
+.lyric-panel {
+  position: fixed;
+  z-index: 95; /* 与播放条同层带：盖过主界面 UI，不抢弹窗（modal 层更高） */
+  right: 22px;
+  bottom: 96px; /* 让开底部播放条（bottom 18px + 条高约 60px） */
+  width: min(420px, calc(100vw - 44px));
+  max-height: min(52vh, 460px);
+  display: flex;
+  flex-direction: column;
+  color: var(--theme-ink, #080a08);
+  background: rgba(var(--theme-paper-rgb, 234, 229, 225), 0.86);
+  border: 1px solid var(--theme-line, #aaa59a);
+  border-radius: 12px;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.14);
+  font-size: 14px;
+  letter-spacing: 0.03em;
+  overflow: hidden;
+}
+
+.lyric-panel[hidden] {
+  display: none;
+}
+
+/* 播放条「词」钮选中态（基础尺寸沿用 pb-btn，不碰 player.css） */
+#player-bar .pb-btn.pb-lyric-active {
+  color: var(--theme-paper, #ece9e4);
+  background: var(--theme-ink, #080a08);
+  border-color: var(--theme-ink, #080a08);
+}
+
+.lyric-panel .lyric-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid var(--theme-line, #aaa59a);
+  flex: 0 0 auto;
+}
+
+.lyric-panel .lyric-kicker {
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  color: var(--theme-muted, #77756d);
+  /* 竖线刻度：与工作台标题同款 */
+  border-left: 2px solid var(--theme-accent, #9b7247);
+  padding-left: 7px;
+}
+
+.lyric-panel .lyric-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 10px;
+  color: var(--theme-muted, #77756d);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lyric-panel .lyric-close {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  color: var(--theme-muted, #77756d);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.lyric-panel .lyric-close:hover {
+  color: var(--theme-ink, #080a08);
+}
+
+.lyric-panel .lyric-body {
+  position: relative;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  padding: 0 14px;
+  /* 上下文行淡出用 mask 而不是叠加渐变遮罩：滚动时上下边缘自然衰减，中间全亮 */
+  mask-image: linear-gradient(180deg, transparent, #000 16%, #000 84%, transparent);
+  -webkit-mask-image: linear-gradient(180deg, transparent, #000 16%, #000 84%, transparent);
+  scroll-behavior: smooth;
+}
+
+.lyric-panel .lyric-body::-webkit-scrollbar {
+  display: none;
+}
+
+.lyric-panel .lyric-fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0; /* 淡出已由 mask 完成，保留节点供后续视觉迭代 */
+  pointer-events: none;
+}
+
+/* 行基础态：非当前行随距离淡出（JS 只标 active，上下文用 nth 近似压暗，保持零逐帧计算） */
+.lyric-panel .lyric-line {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  padding: 6px 2px;
+  color: var(--theme-muted, #77756d);
+  opacity: 0.55;
+  transition: opacity 240ms ease, color 240ms ease, transform 240ms ease;
+  transform: translateZ(0);
+  word-break: break-word;
+}
+
+.lyric-panel .lyric-line + .lyric-line {
+  margin-top: 2px;
+}
+
+/* 配对译文行（相邻两行脚本不同）：弱一档 + 缩进，视觉上与原文成对 */
+.lyric-panel .lyric-line.lyric-paired {
+  font-size: 12px;
+  padding-left: 10px;
+  border-left: 1px solid var(--theme-line, #aaa59a);
+  margin-left: 2px;
+}
+
+.lyric-panel .lyric-line.lyric-active {
+  opacity: 1;
+  color: var(--theme-ink, #080a08);
+  font-weight: 600;
+  transform: scale(1.02);
+}
+
+.lyric-panel .lyric-line.lyric-active.lyric-paired {
+  color: var(--theme-accent, #9b7247);
+}
+
+/* 当前行两侧相邻行再弱一档（CSS 相邻选择器近似，避免 JS 逐行算距离；上下远端由 mask 淡出） */
+.lyric-panel .lyric-line.lyric-active + .lyric-line {
+  opacity: 0.7;
+}
+
+.lyric-panel .lyric-empty {
+  opacity: 0.8;
+  justify-content: center;
+  color: var(--theme-muted, #77756d);
+}
+
+/* 亮暗跟随：暗色下靠 --theme-* 自动换纸墨色，无额外分支 */
+
+/* 窄屏（手机竖屏）：底部抽屉化，铺满宽度贴住播放条上方 */
+@media (max-width: 700px) {
+  .lyric-panel {
+    left: 10px;
+    right: 10px;
+    width: auto;
+    bottom: 118px;
+    max-height: 40vh;
+  }
+}
+
+/* 减少动态效果：滚动与过渡直接到位 */
+@media (prefers-reduced-motion: reduce) {
+  .lyric-panel .lyric-body {
+    scroll-behavior: auto;
+  }
+  .lyric-panel .lyric-line {
+    transition: none;
+  }
+  .lyric-panel .lyric-line.lyric-active {
+    transform: none;
+  }
+}
