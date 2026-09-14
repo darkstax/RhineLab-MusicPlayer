@@ -63,25 +63,44 @@ Start-Sleep -Milliseconds 600
 Write-Host "=== verify level=$Level scale=$TimeScale mirror=$work ===" -ForegroundColor Cyan
 
 # —— 1. git 构建指纹（缓存判定 + 强制重编触发器）——
-function Git-Out([string[]]$gitArgs) {
-  # git 对 UNC 工作目录（-C 与 cwd 皆试过）静默失败 → Start-Process 显式本地 WorkingDirectory，
-  # stdout 落临时文件中转（本函数被调用时 $work 必已存在）。
-  $tmp = Join-Path $work ("git-out-{0}.txt" -f [guid]::NewGuid().ToString('N'))
-  $p = Start-Process -FilePath 'git' -ArgumentList $gitArgs -WorkingDirectory $work `
-    -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput $tmp
-  $txt = @(Get-Content -LiteralPath $tmp -ErrorAction SilentlyContinue)
-  Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
-  if ($p.ExitCode -ne 0) { return @() }
-  return $txt
+function Git-Out([string]$cmd) {
+  # Windows git 对 UNC（-C 与 cwd 皆败，exit 128/129，实测）→ 走 WSL 原生 git。
+  # $cmd 为完整 bash 命令（内部只用单引号，路径均 ASCII 无空格）；失败/非零退出 → 空数组。
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = 'wsl.exe'
+  $psi.Arguments = '-e bash -c "' + $cmd + '"'
+  $psi.RedirectStandardOutput = $true
+  $psi.UseShellExecute = $false
+  $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+  $proc = [System.Diagnostics.Process]::Start($psi)
+  $stdout = $proc.StandardOutput.ReadToEnd()
+  $proc.WaitForExit()
+  if ($proc.ExitCode -ne 0) { return @() }
+  return @($stdout -split "`n" | Where-Object { $_ -ne '' })
 }
+
 function Get-BuildFingerprint {
-  # $work 是仓库的 robocopy 镜像 → 在其中跑 git 与在仓库跑等价（.git 经 host/ 之外镜像不到，
-  # 故用 -C 显式指仓库；Git-Out 已处理 UNC 问题）。
-  $head = (Git-Out @('-C', $repoWin, 'rev-parse', '--short', 'HEAD')) -join ''
-  $dirty = (Git-Out @('-C', $repoWin, 'status', '--porcelain')) -join "`n"
-  $sha = ([Security.Cryptography.SHA256]::Create()).ComputeHash([Text.Encoding]::UTF8.GetBytes("$head|$dirty"))
+  # repoWin 的 WSL 视角（本仓固定；换仓需同步或自动转换）
+  $repoLinux = '/home/starl/ai-code/RhineLab-MusicPlayer'
+  $head = (Git-Out "git -C $repoLinux rev-parse --short HEAD") -join ''
+  $changed = @(Git-Out "git -C $repoLinux diff --name-only HEAD") +
+             @(Git-Out "git -C $repoLinux ls-files --others --exclude-standard")
+  # （ASCII 路径版）
+  $changed = @($changed | Where-Object { $_ } | Sort-Object -Unique)
+  $blobs = @()
+  if ($changed.Count -gt 0) {
+    # 清单写本地盘（\wsl.localhost 反推 /mnt/c 路径给 WSL 读）
+    $listWin = Join-Path $work '.fp-list.txt'
+    [IO.File]::WriteAllLines($listWin, [string[]]$changed, [Text.UTF8Encoding]::new($false))
+    # 清单经 /mnt/c 文件传给 WSL git（中文文件名不过 PowerShell 字符串管道）
+    $listLinux = ($listWin -replace '^C:\\', '/mnt/c/' -replace '\\', '/')
+    $blobs = Git-Out "git -C $repoLinux hash-object --stdin < '$listLinux'"
+  }
+  $sha = ([Security.Cryptography.SHA256]::Create()).ComputeHash(
+    [Text.Encoding]::UTF8.GetBytes("$head|$($changed -join ',')|$($blobs -join ',')"))
   return "$head-$(([BitConverter]::ToString($sha)).Replace('-','').Substring(0,16))"
 }
+
 $fp = Get-BuildFingerprint
 $fpFile = Join-Path $work '.build-fingerprint'
 $passFile = Join-Path $work ".verify-pass-$Level.$TimeScale"
