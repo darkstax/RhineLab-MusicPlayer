@@ -21,6 +21,7 @@ add_executable(RhineCore
   src/protocol.cpp
   src/engine.cpp
   src/audio.cpp
+  src/output-policy.cpp   # M4-a 协商状态机（纯逻辑，harness=tools/output-policy-test）
   src/spectrum.cpp   # M3 频谱 tap（FFT=kissfft 在会话线程；回调侧只 memcpy）
   src/miniaudio_impl.cpp   # MINIAUDIO_IMPLEMENTATION 单独成 TU（增量编译友好）
   # M5a 债 2：kissfft（BSD-3-Clause）——实数 FFT 轮子，走 vendor 同口径 /external:W0。
