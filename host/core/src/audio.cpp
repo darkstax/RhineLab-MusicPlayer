@@ -112,11 +112,61 @@ constexpr double kFullScale = 2147483648.0;  // 2^31：s32 → [-1,1)
 
 AudioBackend::AudioBackend() {
     chunkS32_.resize(static_cast<std::size_t>(kChunkFrames) * 2);
+    ringStorage_.resize(kRingBytes);
+    // 环：预分配自有缓冲（回调零分配红线）；s32 × 2ch × 65536 帧。
+    const ma_result rbRc = ma_pcm_rb_init_ex(
+        ma_format_s32, kRingChannels, kRingFrames, 1, kRingFrames, ringStorage_.data(), nullptr, &ring_);
+    if (rbRc != MA_SUCCESS) {
+        // 理论上不可达（init_ex 传预分配缓冲只校验参数）；失败时置空，首次 push/pop 自降级。
+        ring_.rb.pBuffer = nullptr;
+    }
 }
 
 AudioBackend::~AudioBackend() {
     CloseTrack();
     CloseDevice();
+    ma_pcm_rb_uninit(&ring_);
+}
+
+// ---------------------------------------------------------------------------
+// 环适配层（M5a 债 1）：ma_pcm_rb 的 acquire/commit 每次只交出一段连续区间，
+// 回绕需循环调用；语义与旧 SpscRing 逐条对齐：
+//   push：满时丢多余帧（只写可用空间），返回实写帧数；
+//   pop ：不足时读全部可读帧，返回实读帧数；
+//   readable：写-读指针字节距离 ÷ 8（EOF 排空判据 EofDrained 消费，M2-FINDINGS §7.2 语义保持）。
+// ---------------------------------------------------------------------------
+
+std::size_t AudioBackend::RingPush(const std::int32_t* data, std::size_t frames) {
+    std::size_t written = 0;
+    while (written < frames) {
+        ma_uint32 want = static_cast<ma_uint32>(frames - written);
+        void* dst = nullptr;
+        if (ma_pcm_rb_acquire_write(&ring_, &want, &dst) != MA_SUCCESS || want == 0) break;
+        std::memcpy(dst, data + written * kRingChannels,
+                    static_cast<std::size_t>(want) * kRingChannels * sizeof(std::int32_t));
+        if (ma_pcm_rb_commit_write(&ring_, want) != MA_SUCCESS) break;
+        written += want;
+    }
+    return written;
+}
+
+std::size_t AudioBackend::RingPop(std::int32_t* data, std::size_t frames) {
+    std::size_t got = 0;
+    while (got < frames) {
+        ma_uint32 want = static_cast<ma_uint32>(frames - got);
+        void* src = nullptr;
+        if (ma_pcm_rb_acquire_read(&ring_, &want, &src) != MA_SUCCESS || want == 0) break;
+        std::memcpy(data + got * kRingChannels, src,
+                    static_cast<std::size_t>(want) * kRingChannels * sizeof(std::int32_t));
+        if (ma_pcm_rb_commit_read(&ring_, want) != MA_SUCCESS) break;
+        got += want;
+    }
+    return got;
+}
+
+std::size_t AudioBackend::RingReadableFrames() {
+    const ma_int32 bytes = ma_rb_pointer_distance(&ring_.rb);
+    return bytes > 0 ? static_cast<std::size_t>(bytes) / (kRingChannels * sizeof(std::int32_t)) : 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -214,7 +264,7 @@ void AudioBackend::Callback(void* pOutput, ma_uint32 frameCount) {
     const std::size_t want = frameCount;
     std::int32_t* scratch = popScratch_.data();
     const std::size_t got = want <= popScratch_.size() / 2
-                                ? ring_.pop(scratch, want)
+                                ? RingPop(scratch, want)
                                 : 0;  // 理论不可达：popScratch 按 period*2+4096 预配
     // underrun 只在「已喂过数据之后仍断流」时计（startup ramp 与停喂窗口不算，否则
     // 每次起播都假报一轮）。
@@ -316,7 +366,7 @@ bool AudioBackend::OpenTrack(const std::string& utf8Path, std::string& error) {
     facts_.outChannels = outChannels;
     facts_.outInteger = true;  // 本实现强制 s32 输出容器
 
-    ring_.reset();
+    ma_pcm_rb_reset(&ring_);
     anchorFrames_.store(0, std::memory_order_relaxed);
     anchorPlayed_.store(0, std::memory_order_relaxed);
     playedFrames_.store(0, std::memory_order_relaxed);
@@ -342,7 +392,7 @@ void AudioBackend::CloseTrack() {
         trackOpen_.store(false, std::memory_order_release);
     }
     facts_ = TrackFacts{};
-    ring_.reset();
+    ma_pcm_rb_reset(&ring_);
     anchorFrames_.store(0, std::memory_order_relaxed);
     anchorPlayed_.store(0, std::memory_order_relaxed);
     playedFrames_.store(0, std::memory_order_relaxed);
@@ -365,7 +415,7 @@ bool AudioBackend::RestartStream(std::uint64_t startFrames, std::int64_t* elapse
     const std::int64_t t0 = SteadyMs();
     StopDeviceIfStarted();
     QuiesceFeed();
-    ring_.reset();
+    ma_pcm_rb_reset(&ring_);
     if (startFrames > facts_.lengthFrames) startFrames = facts_.lengthFrames;
     if (ma_decoder_seek_to_pcm_frame(&decoder_, startFrames) != MA_SUCCESS) {
         // 不可 seek 的流：回 EOF 位置（= 立刻曲终自动 stopped 语义），不算命令失败。
@@ -398,7 +448,7 @@ void AudioBackend::FreezeStream() {
     QuiesceFeed();
     anchorFrames_.store(frozen, std::memory_order_relaxed);
     anchorPlayed_.store(playedFrames_.load(std::memory_order_relaxed), std::memory_order_relaxed);
-    ring_.reset();
+    ma_pcm_rb_reset(&ring_);
 }
 
 void AudioBackend::ResumeStream(std::string& error) {
@@ -427,7 +477,7 @@ void AudioBackend::SeekFrozen(std::uint64_t frames) {
     // 调用方（engine）保证设备已停且状态机处于非 playing；解码线程可能仍在喂
     // （stopped 后 feed 继续的情况 = ring 残留）——同样先静默再动 decoder/ring。
     QuiesceFeed();
-    ring_.reset();
+    ma_pcm_rb_reset(&ring_);
     primed_.store(false, std::memory_order_relaxed);
     if (frames > facts_.lengthFrames) frames = facts_.lengthFrames;
     if (ma_decoder_seek_to_pcm_frame(&decoder_, frames) != MA_SUCCESS) {
@@ -439,9 +489,9 @@ void AudioBackend::SeekFrozen(std::uint64_t frames) {
     Reanchor(frames);
 }
 
-bool AudioBackend::EofDrained() const {
+bool AudioBackend::EofDrained() {
     return track_open() && eofReached_.load(std::memory_order_relaxed) &&
-           ring_.readable() == 0;
+           RingReadableFrames() == 0;
 }
 
 void AudioBackend::Reanchor(std::uint64_t frames) {
@@ -482,7 +532,7 @@ void AudioBackend::DecoderLoop() {
             continue;
         }
 
-        const std::size_t space = ring_.capacity_frames() - ring_.readable();
+        const std::size_t space = static_cast<std::size_t>(kRingFrames) - RingReadableFrames();
         if (space < static_cast<std::size_t>(kChunkFrames)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
             continue;
@@ -500,7 +550,7 @@ void AudioBackend::DecoderLoop() {
             continue;
         }
         if (got > 0) {
-            ring_.push(chunkS32_.data(), static_cast<std::size_t>(got));
+            RingPush(chunkS32_.data(), static_cast<std::size_t>(got));
             primed_.store(true, std::memory_order_relaxed);
         }
         if (rc == MA_AT_END || got == 0 || got < kChunkFrames) {

@@ -24,7 +24,6 @@
 
 #include "miniaudio.h"
 #include "protocol.h"
-#include "ring.h"
 #include "spectrum.h"
 
 namespace rhine {
@@ -85,12 +84,14 @@ public:
     // 续播：decoder seek 到锚点 → 恢复解码 → 起设备（不重锚 = 位置连续）。
     void ResumeStream(std::string& error);
     // 曲终检测（解码线程 EOF 且 ring 排空）：状态机 1Hz tick 用。
-    bool EofDrained() const;
+    bool EofDrained();
 
     // ---- 时钟（帧域 = 设备应用速率）----
     std::uint64_t PositionFrames();  // 锚点 + max(0, played - anchorPlayed)，钳 [0,length]
     void Reanchor(std::uint64_t frames);
-    std::size_t ring_backlog_frames() const { return ring_.readable(); }
+    // 可读帧数（字节距离 ÷ 8 = 帧）：ma_rb_pointer_distance 返回读指针到写指针可读字节。
+    std::size_t ring_backlog_frames() { return RingReadableFrames(); }
+    std::size_t RingReadableFrames();  // 帧颗粒（= 旧 readable()，EOF 排空判据消费此值）
 
     // ---- 音量（约束 5：float 软件增益 + 端点音量两路都留接口）----
     void SetSoftwareGain(float gain);
@@ -110,6 +111,11 @@ public:
     const SpectrumTap& spectrum() const { return spectrum_; }
 
 private:
+    // 环读写（帧颗粒；push/pop 自动处理两段回绕，语义 = 旧 SpscRing：写满丢多余帧、
+    // 读不足读全部可读）。
+    std::size_t RingPush(const std::int32_t* data, std::size_t frames);
+    std::size_t RingPop(std::int32_t* data, std::size_t frames);
+
     void Callback(void* pOutput, ma_uint32 frameCount);
     static void StaticCallback(ma_device* device, void* pOutput, const void* pInput,
                                ma_uint32 frameCount);
@@ -133,7 +139,17 @@ private:
     std::atomic<bool> trackOpen_{false};
     TrackFacts facts_;
 
-    SpscRing ring_{1u << 16};  // 65536 帧（≈683ms@96k / 1.36s@48k ≥ 2×buffer_ms 纪律）
+    // 环（M5a 债 1：自写 SpscRing → vendor ma_pcm_rb）：s32 容器 × 2ch × 65536 帧
+    // （≈683ms@96k / 1.36s@48k ≥ 2×buffer_ms 纪律）。预分配自有缓冲（构造时 init，
+    // 析构 uninit），满足「回调零分配」红线；ma_rb 自带满环判定（写指针同圈次数
+    // 封顶于读指针 = 满，不可超过），与旧 SpscRing 的 push 丢多余帧语义一致。
+    // 旧 peek 无任何现存调用者，随 ring.{h,cpp} 一并删除（M5-PLAN-v2 §4.5 债 1）。
+    static constexpr ma_uint32 kRingFrames = 1u << 16;
+    static constexpr ma_uint32 kRingChannels = 2;
+    static constexpr std::size_t kRingBytes =
+        static_cast<std::size_t>(kRingFrames) * kRingChannels * sizeof(std::int32_t);
+    ma_pcm_rb ring_{};
+    std::vector<std::uint8_t> ringStorage_;
 
     std::thread decoderThread_;
     std::mutex cvMtx_;

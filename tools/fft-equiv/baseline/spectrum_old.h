@@ -16,12 +16,10 @@
 
 #include <array>
 #include <atomic>
+#include <complex>
 #include <cstddef>
 #include <cstdint>
-#include <vector>
 
-#include "kiss_fft.h"
-#include "kiss_fftr.h"
 #include "protocol.h"
 
 namespace rhine {
@@ -58,11 +56,11 @@ private:
         std::atomic<std::uint32_t> state{0};
     };
 
-    // 一整窗（srcSlot 的 L 或 R 声道，交错步长 2）→ 64 带 dB 级别 + 主 bin 相位。
-    // FFT 由 kissfft 实数变换承担（M5a 债 2：1024 点实输入 → N/2+1=513 条谱线，
-    // 与旧 radix-2 全复数实现的 bin 1..512 一一对应；带映射/相位取法逐条不变）。
+    // FFT 一整窗（srcSlot 的 L 或 R 声道，交错步长 2）→ 64 带 dB 级别 + 主 bin 相位。
     void AnalyzeChannel(const std::int32_t* interleaved, bool rightChannel, std::uint32_t rate,
                         double* levels, double* phases);
+    // radix-2 迭代 FFT（musicfox transform 同款：前置补零 + 位反转 + 蝶形）。
+    void Transform(const float* windowed);
 
     std::atomic<bool> enabled_{false};
 
@@ -86,16 +84,9 @@ private:
     std::array<double, kSpectrumBands> velR_{};
     std::array<double, kSpectrumBands> phaseL_{};   // 预留（不进 payload，见文件头）
     std::array<double, kSpectrumBands> phaseR_{};
-    std::array<kiss_fft_cpx, kSpectrumFFT / 2 + 1> fftOut_{};  // kiss_fftr 输出（bin 0..512）
-    // s32→标量 × Hann 的中转；类型跟 kiss_fft_scalar 走（本工程定义为 double，
-    // 与旧自写 double 路径同精度——A2 等价验收的硬前提）。
-    std::array<kiss_fft_scalar, kSpectrumFFT> mono_{};
+    std::array<std::complex<double>, kSpectrumFFT> fft_{};
+    std::array<float, kSpectrumFFT> mono_{};        // s32→f32 × Hann 的中转
     std::array<double, kSpectrumFFT> windowCoeff_{};  // Hann（构建一次）
-    // kissfft 配置：构造时一次性建入自持缓冲（kiss_fftr_alloc 传 mem 则不 malloc），
-    // 析构无需释放（红线纪律与 ring 同款：运行期零分配；分析在会话线程本可分配，
-    // 但自持缓冲让「无隐藏 malloc」可静态审计）。
-    std::vector<unsigned char> fftCfgStorage_;
-    kiss_fftr_cfg fftCfg_ = nullptr;
     // beat_phase：低频包络上升沿计时（简化包络检测，语义见 M3-FINDINGS）。
     double lastBeatUptimeS_ = -1.0;
     double beatIntervalS_ = 0.5;  // 间隔 EMA 初值（120bpm）

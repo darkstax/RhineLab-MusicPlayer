@@ -1,8 +1,6 @@
 // spectrum.cpp — 见 spectrum.h 的契约。数值规格逐条对照 musicfox spectrum.go：
 //   Hann:      0.5 * (1 - cos(2πi/(N-1)))
-//   FFT:       kissfft 实数变换 kiss_fftr（M5a 债 2：1024 点实输入 → 513 谱线，省约一半
-//              复数蝶形；旧自写 radix-2 已删，等价性取证见 tools/fft-equiv/ 与
-//              docs/M5A-FINDINGS.md）
+//   FFT:       迭代 radix-2，位反转交换后蝶形；twiddle[k] = e^{-2πik/N}（预计算）
 //   带映射:    lo=60, hi=min(16000, rate/2)，ratio=hi/lo，
 //              startFreq = lo * ratio^(band/64)，endFreq = lo * ratio^((band+1)/64)
 //              startBin = max(1, floor(startFreq*N/rate))，endBin = min(N/2, ceil(endFreq*N/rate))
@@ -30,6 +28,15 @@ std::int64_t SteadyMsLocal() {
     return static_cast<std::int64_t>(GetTickCount64());  // 单调毫秒（与 steady 时钟同量级用途）
 }
 
+std::uint32_t ReverseBits10(std::uint32_t v) {
+    std::uint32_t rev = 0;
+    for (int bit = 0; bit < 10; ++bit) {  // log2(1024) = 10（musicfox reverseSpectrumBits）
+        rev = rev << 1 | (v & 1u);
+        v >>= 1;
+    }
+    return rev;
+}
+
 double Clamp01(double v) { return std::min(1.0, std::max(0.0, v)); }
 
 }  // namespace
@@ -40,12 +47,6 @@ SpectrumTap::SpectrumTap() {
             static_cast<double>(0.5f *
                                 (1.0f - static_cast<float>(std::cos(kTwoPi * i / (kSpectrumFFT - 1)))));
     }
-    // kissfft 配置：先探长度，再一次性建入自持缓冲（运行期零 malloc；分析在会话线程，
-    // 但预分配让「无隐藏分配」可静态审计，与 ring 红线同款）。
-    std::size_t cfgBytes = 0;
-    kiss_fftr_alloc(kSpectrumFFT, 0, nullptr, &cfgBytes);
-    fftCfgStorage_.resize(cfgBytes);
-    fftCfg_ = kiss_fftr_alloc(kSpectrumFFT, 0, fftCfgStorage_.data(), &cfgBytes);
 }
 
 // ---------------------------------------------------------------------------
@@ -101,9 +102,34 @@ void SpectrumTap::Reset() {
 }
 
 // ---------------------------------------------------------------------------
-// FFT（消费者线程）：输入 = mono_（已乘 Hann 的 float 单声道）→ kiss_fftr（实数 FFT，
-// 输出 bin 0..N/2 共 513 条，与旧自写的 fft_[bin] 索引一一对应）。
+// FFT（消费者线程）：输入 = mono_（已乘 Hann 的 float 单声道），原地迭代 radix-2。
 // ---------------------------------------------------------------------------
+
+void SpectrumTap::Transform(const float* windowed) {
+    for (int i = 0; i < kSpectrumFFT; ++i) {
+        fft_[i] = {static_cast<double>(windowed[i]), 0.0};
+    }
+    for (int i = 1; i < kSpectrumFFT; ++i) {
+        const std::uint32_t rev = ReverseBits10(static_cast<std::uint32_t>(i));
+        if (static_cast<std::uint32_t>(i) < rev) std::swap(fft_[i], fft_[rev]);
+    }
+    // twiddle 现算（5120 次 sincos/FFT 对现代 CPU ≈ 几十 µs，30Hz×2ch 远低于预算；
+    // 避免 1024×2 静态表 + once_flag 的初始化顺序负担——增量与 musicfox 的差别仅此一处）。
+    for (int size = 2; size <= kSpectrumFFT; size <<= 1) {
+        const int half = size / 2;
+        const int stride = kSpectrumFFT / size;
+        for (int offset = 0; offset < kSpectrumFFT; offset += size) {
+            for (int i = 0; i < half; ++i) {
+                const double angle = -kTwoPi * static_cast<double>(i * stride) / kSpectrumFFT;
+                const std::complex<double> w(std::cos(angle), std::sin(angle));
+                const auto even = fft_[static_cast<std::size_t>(offset + i)];
+                const auto odd = w * fft_[static_cast<std::size_t>(offset + i + half)];
+                fft_[static_cast<std::size_t>(offset + i)] = even + odd;
+                fft_[static_cast<std::size_t>(offset + i + half)] = even - odd;
+            }
+        }
+    }
+}
 
 void SpectrumTap::AnalyzeChannel(const std::int32_t* interleaved, bool rightChannel,
                                  std::uint32_t rate, double* levels, double* phases) {
@@ -113,7 +139,7 @@ void SpectrumTap::AnalyzeChannel(const std::int32_t* interleaved, bool rightChan
             static_cast<double>(interleaved[static_cast<std::size_t>(i) * 2 + shift]) *
             (1.0 / kFullScale)) * static_cast<float>(windowCoeff_[static_cast<std::size_t>(i)]);
     }
-    kiss_fftr(fftCfg_, mono_.data(), fftOut_.data());
+    Transform(mono_.data());
 
     const double lo = 60.0;
     const double hi = std::min(16000.0, static_cast<double>(rate) / 2.0);
@@ -136,11 +162,11 @@ void SpectrumTap::AnalyzeChannel(const std::int32_t* interleaved, bool rightChan
         double mag = 0.0;
         double bestPhase = 0.0;
         for (int bin = startBin; bin < endBin; ++bin) {
-            const auto& v = fftOut_[static_cast<std::size_t>(bin)];
-            const double m = std::hypot(static_cast<double>(v.r), static_cast<double>(v.i));
+            const auto& v = fft_[static_cast<std::size_t>(bin)];
+            const double m = std::hypot(v.real(), v.imag());
             if (m > mag) {
                 mag = m;
-                bestPhase = std::atan2(static_cast<double>(v.i), static_cast<double>(v.r));
+                bestPhase = std::atan2(v.imag(), v.real());
             }
         }
         const double db = 20.0 * std::log10(mag * fftScale + 1e-9);

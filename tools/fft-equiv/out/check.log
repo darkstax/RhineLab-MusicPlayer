@@ -1,0 +1,2 @@
+frames=120 sets={"silence":40,"flac24":40,"mp3":40} max|Δband|=0 non-zero-Δ samples=0
+FFT-EQUIV-PASS
