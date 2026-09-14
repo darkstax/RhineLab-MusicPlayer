@@ -13,9 +13,28 @@ import { mountPlayerBar } from "./player/player-bar";
 import { playerStore } from "./player/player-store";
 import { spectrumBridge } from "./player/spectrum-bridge";
 import { lyricView } from "./player/lyrics/lyric-view";
+import { albumWall, wallSession } from "./player/covers/album-wall";
+import { hydrateFromLibrary } from "./data";
+import { mountLibraryPanel } from "./player/library/library-panel";
 
 if (bridge.desktop) {
   spectrumBridge.start();
+  // M5d：专辑墙数据层水合（caps 无 library 的旧壳/桩 → hydrate 内部 stats 失败回退
+  // 演示数据，不抛异常）。main.ts 在首帧前 await wallSession.hydration。
+  wallSession.hydration = (async () => {
+    const result = await hydrateFromLibrary(bridge).catch((error) => ({
+      ok: false,
+      albums: 0,
+      columns: 0,
+      truncated: false,
+      reason: error instanceof Error ? error.message : "hydrate crashed",
+    }));
+    return result;
+  })();
+  // 封面三态配置（壳 config.get wall.covers；失败回退 localStorage）。
+  void albumWall.loadConfig();
+  // M5A-FINDINGS P2-5 归还：曲库面板接线（自挂载契约；caps 就绪才建 DOM）。
+  mountLibraryPanel();
 }
 
 /** 协议 v1.4 §5：engine.play 的 lib:<track_id> 前缀 → library.get 数字 id。其它来源无库条目。 */
