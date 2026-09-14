@@ -81,6 +81,7 @@ public static class Cli
             ["failed"] = result.Quarantined,
             ["failure_rate"] = Math.Round(result.FailureRate, 5),
             ["failure_rate_high"] = result.FailureRateHigh,  // P-3 触发标志
+            ["roots_missing"] = result.RootsMissing,          // 审查 P1-1：roots 全不存在=配置错误非空库
             ["elapsed_ms"] = result.ElapsedMs,
             ["skipped_unchanged"] = result.SkippedUnchanged,
         });

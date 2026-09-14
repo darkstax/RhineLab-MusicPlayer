@@ -166,3 +166,20 @@ laneA3 报告"三路径全 PASS"，主进程独立 CLI 复跑抓到 **3 个真�
 
 教训入规：lane 报告的验收数字必须至少抽查一条**独立复跑**；"自报全绿 + 工具覆盖不到该路径"
 是组合盲区（fts-verify 的词表生成偏长词，恰好绕开了 2 字 LIKE 路径）。
+
+## 11. 审查 P1 修复（主进程，09-14）
+
+- **P1-1 个人目录硬编码**：`LibraryDb.DefaultRoot` → `SpecialFolder.MyMusic`；ScanOutcome 增
+  `RootsMissing`（CLI 输出 `roots_missing`）。实测：`--cli-scan D:\no-such` → roots_missing=true、
+  scanned=0、DB 完好；混合（不存在+真库）→ false 正常扫。
+- **P1-2 超时不打断底层读**：新增 `AbortingFileSystem`（IFileSystem 注入点）——超时 Dispose
+  即关闭在持有的 FileStream 打断读；写/删成员全抛 NotSupportedException（只读红线的机制化）。
+  catch 面补 ObjectDisposedException。消除"4 个 hang 文件→_busy 恒 1→曲库永久 library_busy"停摆路径。
+- **P1-3 跨进程扫描互踩**：meta 表 `scan_lease`（pid|心跳戳，30s 心跳自开短连接守连接纪律，
+  90s TTL 可抢占，正常尾 DELETE）。实测：后台全量扫 + 3s 后前台并发 → 后者
+  `library_busy("another process holds the scan lease")`，后台 exit=0，事后扫描正常。
+- 附带：P2-8 顺手（LibraryBusyException(why) 构造 + Cli roots_missing 字段）。
+- **P2 处置**：P2-1 stale 未实现→M5d 不消费该列，FINDINGS 即备案；P2-2 fts-verify 与产品路径
+  不同源→接受（转 M6 债务清单）；P2-3 routes 字段→M6 协议 v1.5 登记；P2-4 2000 截断→1116 规模
+  不触发，M6 诊断页加 truncated 标志；P2-5 面板未接线零执行→**主进程接线归 M5d 步骤 5 一并做**；
+  P2-6 covers 只增→M6 清理项；P2-7/9/10 登记。

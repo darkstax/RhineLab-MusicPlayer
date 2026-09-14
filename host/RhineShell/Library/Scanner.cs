@@ -37,12 +37,16 @@ public sealed class Scanner
         /// <summary>读取失败返回 (null, 原因)；成功返回 (Result, null)。绝不抛（§7.2 触发面全捕获）。</summary>
         internal static (Result?, string?) Read(string path)
         {
+            // 审查 P1-2：超时不只是"不等了"——注入 AbortingFileSystem，超时即 Dispose
+            // 关掉它正持有的 FileStream，让底层读抛 IOException 终止（消除线程/句柄泄漏
+            // 与"4 个 hang 文件让整轮扫描永不收尾、_busy 恒 1"的停摆路径）。
+            using var fs = new AbortingFileSystem();
             try
             {
                 // 5s 超时红线（§7.2）：MediaFile.Read 是同步 IO——交给带超时的等待包装。
                 var task = Task.Run((Func<(Result?, string?)>)(() =>
                 {
-                    var res = MediaFile.Read(path, DefaultFileSystem.Instance);
+                    var res = MediaFile.Read(path, fs);
                     if (!res.IsSuccess) return (null, res.Error ?? "unreadable");
                     var file = (IMediaFile)res.File!;
                     var tag = file.Tag;
@@ -90,7 +94,8 @@ public sealed class Scanner
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
                 or NotSupportedException or ArgumentException
-                or InvalidOperationException or OutOfMemoryException or FormatException)
+                or InvalidOperationException or OutOfMemoryException or FormatException
+                or ObjectDisposedException)   // 超时打断的正常产物：按 read timeout 类隔离
             {
                 return (null, $"{ex.GetType().Name}: {ex.Message}");
             }
@@ -131,10 +136,12 @@ public sealed class Scanner
         }
     }
 
+    /// <param name="RootsMissing">审查 P1-1：全部 roots 目录都不存在（如换用户首启、MyMusic 未建）
+    /// —— 显式失败信号，UI/CLI 据此提示"检查曲库目录配置"，不当成功显示"扫描完成 0 曲"。</param>
     public sealed record ScanOutcome(
         long Scanned, long Added, long Updated, long Removed, long Quarantined,
         long ElapsedMs, long Albums, long Tracks, bool FailureRateHigh, double FailureRate,
-        long SkippedUnchanged);
+        long SkippedUnchanged, bool RootsMissing = false);
 
     /// <summary>当前是否处于扫描中（library_busy 判定，协议 §7）。写类命令入口先查此标志。</summary>
     public static bool Busy => Interlocked.CompareExchange(ref _busy, 0, 0) == 1;
@@ -176,7 +183,22 @@ public sealed class Scanner
         {
             using var db = LibraryDb.Open();
 
+            // 审查 P1-3：跨进程扫描租约（GUI 壳与 --cli-scan 可同跑，进程内 _busy 互不可见；
+            // 两方各持扫描起点的 existing 快照收尾互踩 removed/albums 重建）。租约写在 meta，
+            // 心跳刷新；对手持有效租约（<90s 未更新）时本轮拒跑 library_busy。
+            if (!TryAcquireScanLease(db))
+                throw new LibraryBusyException("another process holds the scan lease");
+
             // 1. 枚举（并行目录遍历；忽略再入错误 = 权限/特殊目录）
+            var existingRoots = roots.Where(Directory.Exists).ToArray();
+            if (existingRoots.Length == 0)
+            {
+                // 全缺 = 配置/环境问题，不是"空库"：0 行改动 + 显式标志。
+                return new ScanOutcome(0, 0, 0, 0, 0,
+                    (long)(DateTimeOffset.UtcNow - startedAt).TotalMilliseconds,
+                    Count(db, "albums"), Count(db, "tracks"), false, 0, 0, RootsMissing: true);
+            }
+            roots = existingRoots;
             var files = new List<string>();
             var fileGate = new object();
             var options = new ParallelOptions
@@ -405,6 +427,7 @@ public sealed class Scanner
 
             long trackCount = Count(db, "tracks");
             long albumCount = Count(db, "albums");
+            DeleteScanLease(db);   // db 尚存活（using var 在 finally 前已释放，DELETE 必须在 try 尾）
             double failureRate = scanned == 0 ? 0 : (double)quarantined / scanned;
             onProgress?.Invoke("done", scanned, scanned);
 
@@ -413,6 +436,7 @@ public sealed class Scanner
         }
         finally
         {
+            StopLeaseHeartbeat();   // DELETE 已在 try 尾；这里只停 timer（异常路径靠 90s TTL）
             Interlocked.Exchange(ref _busy, 0);
         }
     }
@@ -421,6 +445,73 @@ public sealed class Scanner
     public sealed class LibraryBusyException : Exception
     {
         public LibraryBusyException() : base("library scan in progress") { }
+        public LibraryBusyException(string why) : base(why) { }
+    }
+
+    // —— 跨进程扫描租约（meta 表；pid+心跳时间戳；90s 无心跳视为死进程可抢占）——
+    private const long LeaseTtlMs = 90_000;
+    private static int _leaseHeld;
+
+    private static bool TryAcquireScanLease(SqliteConnection db)
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        using (var read = db.CreateCommand())
+        {
+            read.CommandText = "SELECT value FROM meta WHERE key='scan_lease';";
+            if (read.ExecuteScalar() is string raw)
+            {
+                var parts = raw.Split('|');
+                if (parts.Length == 2 && long.TryParse(parts[1], out var beat)
+                    && now - beat < LeaseTtlMs
+                    && (!long.TryParse(parts[0], out var pid) || pid != Environment.ProcessId))
+                    return false;   // 活着的对手进程持租
+            }
+        }
+        WriteLease(db, now);
+        Volatile.Write(ref _leaseHeld, 1);
+        // 心跳自开短连接：扫描线程的 db 非线程安全（本库连接纪律），Timer 回调不得复用。
+        _leaseTimer = new Timer(_ =>
+        {
+            if (Volatile.Read(ref _leaseHeld) != 1) return;
+            try
+            {
+                using var beat = LibraryDb.Open();
+                WriteLease(beat, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            }
+            catch { /* 心跳失败不掀翻扫描；90s TTL 内对手可能抢占，最坏双跑由 removed 收敛兜住 */ }
+        }, null, 30_000, 30_000);
+        return true;
+    }
+
+    private static Timer? _leaseTimer;
+
+    private static void WriteLease(SqliteConnection db, long nowMs)
+    {
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO meta(key, value) VALUES ('scan_lease', $v) ON CONFLICT(key) DO UPDATE SET value=excluded.value;
+            """;
+        cmd.Parameters.AddWithValue("$v", $"{Environment.ProcessId}|{nowMs}");
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void DeleteScanLease(SqliteConnection db)
+    {
+        if (Interlocked.Exchange(ref _leaseHeld, 0) == 0) return;
+        try
+        {
+            using var cmd = db.CreateCommand();
+            cmd.CommandText = "DELETE FROM meta WHERE key='scan_lease';";
+            cmd.ExecuteNonQuery();
+        }
+        catch { /* 对手已抢租约时删对方行无害——TTL 兜底 */ }
+    }
+
+    private static void StopLeaseHeartbeat()
+    {
+        Interlocked.Exchange(ref _leaseHeld, 0);
+        _leaseTimer?.Dispose();
+        _leaseTimer = null;
     }
 
     private sealed record RowData(string Path, TagReader.Result Meta, long Mtime, long Size,

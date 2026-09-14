@@ -25,7 +25,10 @@ namespace RhineShell.Library;
 /// </summary>
 public static class LibraryDb
 {
-    public const string DefaultRoot = @"C:\Users\StarL\Music";
+    /// <summary>默认曲库根（审查 P1-1）：系统"音乐"目录（本机即 C:\Users\StarL\Music，
+    /// 但绝不硬编码个人路径——M6 换用户首启不静默扫 0 文件）。</summary>
+    public static string DefaultRoot =>
+        Environment.GetFolderPath(Environment.SpecialFolder.MyMusic);
 
     /// <summary>库根目录（DB 与 covers 的父目录）。</summary>
     public static string Directory => Environment.GetEnvironmentVariable("RHINE_LIBRARY_DB") is { Length: > 0 } @override

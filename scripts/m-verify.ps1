@@ -75,7 +75,11 @@ function Git-Out([string]$cmd) {
   $proc = [System.Diagnostics.Process]::Start($psi)
   $stdout = $proc.StandardOutput.ReadToEnd()
   $proc.WaitForExit()
-  if ($proc.ExitCode -ne 0) { return @() }
+  if ($proc.ExitCode -ne 0) {
+    # 静默返空会让"指纹退化"与"touch 失效"同时哑火（审查 P0-1 根因放大器）→ 必须出声。
+    Write-Warning "Git-Out failed (exit=$($proc.ExitCode)): $cmd"
+    return @()
+  }
   return @($stdout -split "`n" | Where-Object { $_ -ne '' })
 }
 
@@ -93,8 +97,12 @@ function Get-BuildFingerprint {
     $listWin = Join-Path $work '.fp-list.txt'
     [IO.File]::WriteAllLines($listWin, [string[]]$changed, [Text.UTF8Encoding]::new($false))
     # 清单经 /mnt/c 文件传给 WSL git（中文文件名不过 PowerShell 字符串管道）
-    $listLinux = ($listWin -replace '^C:\\', '/mnt/c/' -replace '\\', '/')
-    $blobs = Git-Out "git -C $repoLinux hash-object --stdin < '$listLinux'"
+    # 盘符大小写不敏感且按实际盘符映射（LOCALAPPDATA 可能是 c:\\...，审查附带项）
+    $drv = ($listWin.Substring(0,1)).ToLower()
+    $listLinux = ('/mnt/' + $drv + ($listWin.Substring(2) -replace '\\', '/'))
+    # ⚠ --stdin 会把清单当**一段数据**出一个 blob（内容变更不进指纹，审查 P0-1）；
+    # --stdin-paths 才是"逐行列出的路径各算一个 blob"。
+    $blobs = Git-Out "git -C $repoLinux hash-object --stdin-paths < '$listLinux'"
   }
   $sha = ([Security.Cryptography.SHA256]::Create()).ComputeHash(
     [Text.Encoding]::UTF8.GetBytes("$head|$($changed -join ',')|$($blobs -join ',')"))
@@ -114,8 +122,11 @@ if (-not $NoCache -and (Test-Path $passFile) -and ((Get-Content $passFile -Raw).
 
 # A 触发器：指纹变化 → touch 变更源文件（robocopy 必然复制 → 镜像 mtime 新 → 重编）
 if (-not $SkipBuild -and $fp -ne $fpOld) {
-  $changed = @(Git-Out @('-C', $repoWin, 'diff', '--name-only', 'HEAD')) +
-              @(Git-Out @('-C', $repoWin, 'ls-files', '--others', '--exclude-standard'))
+  # 审查 P0-1：这里曾用旧数组签名 Git-Out @('-C',...)（改单字符串形参后恒返空 → touched 恒 0，
+  # "强制重编"兜底静默失效）。统一走 WSL git 字符串形参，与 Get-BuildFingerprint 同源。
+  $repoLinux = '/home/starl/ai-code/RhineLab-MusicPlayer'
+  $changed = @(Git-Out "git -C $repoLinux diff --name-only HEAD") +
+              @(Git-Out "git -C $repoLinux ls-files --others --exclude-standard")
   $now = Get-Date; $n = 0
   foreach ($rel in ($changed | Sort-Object -Unique)) {
     if (-not $rel) { continue }
