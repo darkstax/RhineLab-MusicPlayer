@@ -2101,3 +2101,107 @@ button {
 [data-mode="detail"] .boot {
   visibility: hidden;
 }
+
+/* ============================================================
+ * M5d 专辑墙组件段（浮层摘要行 / 格式角标 / 歌单行 / 八字段表）
+ * ============================================================ */
+.callout-sub {
+  margin-left: 58px;
+  margin-top: 14px;
+  font-size: 15px;
+  letter-spacing: 0.6px;
+  color: #6d6a61;
+}
+.callout-meta {
+  margin-left: 58px;
+  margin-top: 10px;
+  font-size: 12px;
+  letter-spacing: 1px;
+  color: #85816f;
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+.callout-meta i {
+  font-style: normal;
+  color: #b3ad9e;
+}
+.wall-badge {
+  position: absolute;
+  right: 0;
+  top: -34px;
+  font-size: 11px;
+  letter-spacing: 2px;
+  padding: 5px 12px 4px;
+  border: 1px solid #8b8574;
+  color: #5c5951;
+  background: rgba(228, 214, 197, 0.35);
+}
+.wall-metadata {
+  gap: 18px 34px;
+}
+.wall-metadata dd {
+  font-size: 13px;
+}
+.track-list {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.track-list > li {
+  border-bottom: 1px solid rgba(139, 133, 116, 0.24);
+}
+.track-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 3.2fr) minmax(0, 2fr) 52px 56px;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  padding: 9px 6px;
+  font-size: 13px;
+  color: inherit;
+  transition: background 0.2s;
+}
+.track-row:hover {
+  background: rgba(139, 133, 116, 0.14);
+}
+.track-row .tr-no {
+  font-size: 10px;
+  color: #a38e72;
+}
+.track-row .tr-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.track-row .tr-artist,
+.track-row .tr-format,
+.track-row .tr-dur {
+  font-size: 11px;
+  color: #77736a;
+}
+.track-row .tr-format {
+  letter-spacing: 0.8px;
+}
+.track-row .tr-dur {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.track-row-loading {
+  color: #9a9487;
+}
+/* 浮层扩展行与水合态文案仅 desktop 阵列显示（web 回归基线保持原样） */
+[data-wall="archive"] .callout-sub,
+[data-wall="archive"] .callout-meta,
+[data-wall="archive"] .wall-badge {
+  display: none;
+}
+/* M5d 设置：专辑墙封面三态（复用 theme-choices 按钮语言）。 */
+.cover-settings { padding: 16px 0; border-bottom: 1px solid #bdb8ad; display: flex; justify-content: space-between; align-items: center; gap: 20px; }
+.cover-settings strong { display: block; font-size: 14px; }
+.cover-settings > div:first-child > span { display: block; margin-top: 6px; font-size: 12px; color: #77756d; max-width: 46ch; }
+.cover-settings .theme-choices { display: flex; gap: 6px; flex: none; }
+.cover-settings .theme-choices button { min-width: 76px; min-height: 42px; border: 1px solid #a6a49c; font-size: 13px; }
+.cover-settings .theme-choices button[aria-pressed="true"] { background: #171713; color: #ece9e4; }
+.cover-degrade-reason { color: #a3611f !important; }

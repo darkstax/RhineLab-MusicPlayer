@@ -61,3 +61,16 @@
 [data-dark-surface="true"] .archive-atmosphere::before {
   background: linear-gradient(180deg, rgba(var(--theme-paper-rgb), .82), transparent 36%), linear-gradient(0deg, rgba(var(--theme-paper-rgb), .84), transparent 25%), radial-gradient(ellipse at 48% 48%, transparent 42%, rgba(var(--theme-paper-rgb), .48) 90%);
 }
+/* M5d 专辑墙组件段（暗色）：浮层摘要行、格式角标、歌单行、页脚统计。 */
+[data-dark-surface="true"] :is(.callout-sub, .callout-meta, .track-row .tr-artist, .track-row .tr-format, .track-row .tr-dur, .track-row-loading) { color: var(--theme-muted); }
+[data-dark-surface="true"] .callout-meta i { color: var(--theme-line); }
+[data-dark-surface="true"] .wall-badge { border-color: var(--theme-line); color: var(--theme-muted); background: rgba(var(--theme-paper-rgb), .18); }
+[data-dark-surface="true"] .track-list > li { border-bottom-color: rgba(var(--theme-paper-rgb), .14); }
+[data-dark-surface="true"] .track-row:hover { background: rgba(var(--theme-paper-rgb), .08); }
+[data-dark-surface="true"] .track-row .tr-no { color: var(--theme-accent); }
+/* M5d 设置三态（暗色）。 */
+[data-dark-surface="true"] .cover-settings { border-bottom-color: var(--theme-line); }
+[data-dark-surface="true"] .cover-settings > div:first-child > span { color: var(--theme-muted); }
+[data-dark-surface="true"] .cover-settings .theme-choices button { border-color: var(--theme-line); }
+[data-dark-surface="true"] .cover-settings .theme-choices button[aria-pressed="true"] { background: var(--theme-ink); color: var(--theme-paper); border-color: var(--theme-ink); }
+[data-dark-surface="true"] .cover-degrade-reason { color: var(--theme-accent) !important; }

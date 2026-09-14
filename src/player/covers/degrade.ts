@@ -74,7 +74,10 @@ export class CoverDegrader {
   private lastGrowthCheck = -1e9;
   private lastFrameCheck = -1e9;
 
-  constructor(private sampler: DegradeSampler) {}
+  private sampler: DegradeSampler;
+  constructor(sampler: DegradeSampler) {
+    this.sampler = sampler;
+  }
 
   /** 用户三态变更（设置入口 = 滞回的唯一恢复通道）。 */
   setUserMode(mode: CoverUserMode) {

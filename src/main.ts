@@ -27,7 +27,11 @@ import {
   archiveColumns,
   columnFiles,
   fileLocation,
+  wallMode,
+  type ArchiveRecord,
 } from "./data";
+import { bridge } from "./desktop-bridge";
+import { albumWall, wallSession } from "./player/covers/album-wall";
 import { TerminalAudio } from "./audio";
 import { audioSettingsMarkup } from "./audio-settings";
 import { StartupGate } from "./startup";
@@ -47,6 +51,39 @@ let wallpaperEffects: WallpaperEffects | undefined;
 const $ = <T extends HTMLElement = HTMLElement>(selector: string) =>
   document.querySelector<T>(selector)!;
 import { logo, brandHeading } from "./brand";
+
+/**
+ * M5d 文案表（§5.6/§5.7）：web 模式（未水合）逐字节保持上游旧字，desktop 水合后
+ * 切换 ARCHIVE→ALBUM、COLUMN→GENRE、ENTER 读取→打开专辑。文案断言冲突清单见
+ * docs/M5D-FINDINGS.md（check-*.mjs 不改断言，只在新界面继续跑）。
+ */
+export function wallCopy() {
+  const album = wallMode.hydrated;
+  return {
+    album,
+    eyebrow: album ? "MUSIC ARCHIVE" : "INTERNAL DATABASE",
+    filePrefix: album ? "ALBUM " : "FILE NUMBER: ",
+    openFile: album ? "打开专辑" : "ACCESS FILE",
+    selectLabel: album ? "ALBUM / SELECT" : "ARCHIVE / SELECT",
+    columnWord: album ? "GENRE" : "COLUMN",
+    hint: album
+      ? '<kbd>←</kbd> <kbd>→</kbd> 切换流派 <span>／</span> <kbd>↑</kbd> <kbd>↓</kbd> 前后专辑 <span>／</span> <kbd>ENTER</kbd> 打开专辑'
+      : '<kbd>←</kbd> <kbd>→</kbd> 切换列 <span>／</span> <kbd>↑</kbd> <kbd>↓</kbd> 前后档案 <span>／</span> <kbd>ENTER</kbd> 读取',
+    back: album ? "返回专辑架" : "ARCHIVE OVERVIEW",
+    dragCaption: album ? "拖动卡片，查看完整封面" : "DRAG TO INSPECT",
+    detailKicker: album ? "MUSIC ARCHIVE" : "INTERNAL DATABASE",
+    captionGroup: album ? "MUSIC ARCHIVE" : "INTERNAL DATABASE",
+  };
+}
+
+/** 毫秒 → m:ss（总时长展示；≥1 小时进位 h:mm:ss）。 */
+function formatDuration(ms: number | null | undefined): string {
+  if (!ms || ms <= 0) return "—";
+  const total = Math.round(ms / 1000);
+  const h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60), s = total % 60;
+  const mm = String(m).padStart(2, "0"), ss = String(s).padStart(2, "0");
+  return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
+}
 
 $("#stage").innerHTML = `
   <div id="three-scene" class="three-scene"></div>
@@ -69,20 +106,20 @@ $("#stage").innerHTML = `
   <svg id="inspection-marks" viewBox="0 0 1920 1080" aria-hidden="true"><path id="inspection-lines"/><g id="inspection-corners"></g><circle id="inspection-point" r="1.8"/></svg>
   <div id="inspection-text" aria-hidden="true">CONFIDENTIALITY:<strong>GENERAL BUSINESS USE</strong></div>
   <section id="archive-ui" class="archive-ui" aria-label="档案选择">
-    <div class="archive-callout"><div class="eyebrow">INTERNAL DATABASE <span>／</span> <span id="archive-category">机构档案</span></div><button class="file-title" data-action="open">FILE NUMBER: <span id="selected-id">X-<span id="selected-code">001</span></span><span class="file-open">↗</span></button><div class="callout-rule"><i></i></div><div class="file-summary"><span id="selected-title">莱茵生命</span><span id="selected-clearance">BUSINESS AREA</span></div><button class="read-file" data-action="open">ACCESS FILE <span>→</span></button></div>
-    <div id="hover-label" class="hover-label" hidden>X-<span id="hover-code">001</span> / <span id="hover-title"></span></div>
-    <div class="archive-counter"><span class="tiny-label">ARCHIVE / SELECT</span><div><span id="selected-number">01</span><i>/</i><span class="count-total">12</span></div></div>
+    <div class="archive-callout"><div class="eyebrow"><span id="eyebrow-prefix">INTERNAL DATABASE</span> <span>／</span> <span id="archive-category">机构档案</span></div><button class="file-title" data-action="open"><span id="file-title-prefix">FILE NUMBER: </span><span id="selected-id"><i class="id-prefix" aria-hidden="true">X-</i><span id="selected-code">001</span></span><span class="file-open">↗</span></button><div class="callout-rule"><i></i></div><div class="file-summary"><span id="selected-title">莱茵生命</span><span id="selected-clearance">BUSINESS AREA</span></div><div class="callout-sub" id="callout-sub" hidden></div><div class="callout-meta" id="callout-meta" hidden></div><button class="read-file" data-action="open"><span id="read-file-label">ACCESS FILE</span> <span>→</span></button><span class="wall-badge" id="cover-badge" hidden></span></div>
+    <div id="hover-label" class="hover-label" hidden><i class="id-prefix" aria-hidden="true">X-</i><span id="hover-code">001</span> / <span id="hover-title"></span></div>
+    <div class="archive-counter"><span class="tiny-label" id="select-label">ARCHIVE / SELECT</span><div><span id="selected-number">01</span><i>/</i><span class="count-total">12</span></div></div>
     <div class="archive-navigation"><button data-action="prev" aria-label="上一个档案">↑</button><div id="file-ticks" class="file-ticks"></div><button data-action="next" aria-label="下一个档案">↓</button></div>
-    <div class="column-navigation"><button data-action="column-prev" aria-label="上一列">←</button><div><span id="column-number">COLUMN <span id="column-index">03</span> / 05</span><strong id="column-name">机构档案</strong></div><button data-action="column-next" aria-label="下一列">→</button></div>
-    <div class="archive-hint"><kbd>←</kbd> <kbd>→</kbd> 切换列 <span>／</span> <kbd>↑</kbd> <kbd>↓</kbd> 前后档案 <span>／</span> <kbd>ENTER</kbd> 读取</div>
+    <div class="column-navigation"><button data-action="column-prev" aria-label="上一列">←</button><div><span id="column-number"><span id="column-word">COLUMN</span> <span id="column-index">03</span> <span class="column-slash">/</span> <span id="column-total">05</span></span><strong id="column-name">机构档案</strong></div><button data-action="column-next" aria-label="下一列">→</button></div>
+    <div class="archive-hint" id="archive-hint"><kbd>←</kbd> <kbd>→</kbd> 切换列 <span>／</span> <kbd>↑</kbd> <kbd>↓</kbd> 前后档案 <span>／</span> <kbd>ENTER</kbd> 读取</div>
   </section>
   <section id="detail-ui" class="detail-ui" aria-label="档案内容" hidden>
-    <button class="back-button" data-action="back">← <span>ARCHIVE OVERVIEW</span><small>ESC</small></button>
-    <div class="object-caption"><span id="object-id">NO.001</span><div>INTERNAL DATABASE</div><small>DRAG TO INSPECT <span>↔</span></small><button class="viewer-open" data-action="model-viewer">360° 查看文档模型 <span>↗</span></button></div>
+    <button class="back-button" data-action="back">← <span id="back-label">ARCHIVE OVERVIEW</span><small>ESC</small></button>
+    <div class="object-caption"><span id="object-id">NO.001</span><div id="caption-group">INTERNAL DATABASE</div><small><span id="drag-caption">DRAG TO INSPECT</span> <span>↔</span></small><button class="viewer-open" data-action="model-viewer">360° 查看文档模型 <span>↗</span></button></div>
     <article id="detail-content" class="detail-content"></article>
   </section>
   <div class="powered">POWERED BY <b>RHINE LAB</b><i></i></div>
-  <footer class="system-footer"><span><i class="status-light"></i> SESSION AUTHORIZED${isWallpaper ? '<button type="button" class="three-toggle" data-action="toggle-three" aria-pressed="true" title="卸载三维模型，保留 2D 界面">3D 开启</button>' : ''}</span><span>JOYCE MOORE <i>／</i> <span id="clock">00:00:00</span></span><button data-action="replay" title="重播启动流程">REINITIALIZE ↗</button></footer>
+  <footer class="system-footer"><span><i class="status-light"></i> SESSION AUTHORIZED${isWallpaper ? '<button type="button" class="three-toggle" data-action="toggle-three" aria-pressed="true" title="卸载三维模型，保留 2D 界面">3D 开启</button>' : ''}</span><span><span id="footer-user">JOYCE MOORE</span><span id="footer-stats" hidden></span> <i>／</i> <span id="clock">00:00:00</span></span><button data-action="replay" title="重播启动流程">REINITIALIZE ↗</button></footer>
   <div id="pwa-update-notice" class="pwa-update-notice" role="status" hidden><span>新版本已就绪</span><button data-pwa-action="update">更新并重启 ↻</button></div>
   <div id="modal-root"></div><div id="toast" class="toast" role="status"></div>
   <div id="loading" class="loading"><div class="loading-mark">${logo}</div><span>CONNECTING TO INTERNAL DATABASE</span><i></i></div>
@@ -234,7 +271,11 @@ let resumeCell: { lane: number; row: number } | undefined;
 let resumeSelection = -1;
 let viewer: ModelViewer | undefined;
 const accessLog: { id: string; time: string }[] = [];
-const columnMemory = archiveColumns.map((_, lane) => columnFiles(lane)[0]);
+/** 每列（流派）记忆选档：列数在水合后变化（5→N），由 rebuildColumnMemory 重建。 */
+let columnMemory = archiveColumns.map((_, lane) => columnFiles(lane)[0]);
+function rebuildColumnMemory() {
+  columnMemory = archiveColumns.map((_, lane) => columnFiles(lane)[0] ?? 0);
+}
 function recordAccess() {
   accessLog.unshift({
     id: records[selected].id,
@@ -265,6 +306,13 @@ function savePrefs() {
   viewer?.setSuperPerformance(superPerformanceEnabled());
   scene?.setQuality(effectiveRenderQuality());
   viewer?.setQuality(effectiveRenderQuality());
+  albumWall.configure({
+    superPerformance: () => superPerformanceEnabled(),
+    anisotropy: () => effectiveRenderQuality().anisotropy,
+    reduced: () => prefs.reduced,
+    wallpaper: () => isWallpaper,
+  });
+  albumWall.syncBudget();
   syncQualityUI(prefs.rendering);
   updateQualitySummary();
   fileCounter.update({ animated: !prefs.reduced && mode === "archive" });
@@ -323,12 +371,33 @@ window.visualViewport?.addEventListener("resize", fit);
 window.visualViewport?.addEventListener("scroll", fit);
 matchMedia("(pointer: coarse)").addEventListener("change", fit);
 fit();
-$("#file-ticks").innerHTML = columnFiles(fileLocation(selected).lane)
-  .map(
-    (index) => `<button data-select="${index}"></button>`,
-  )
-  .join("");
-const fileTicks = [...$("#file-ticks").querySelectorAll<HTMLButtonElement>("button")];
+/** 刻度条窗口上限（M5d：真库单列可达 290 专辑，超出时以选中为中心的滑窗渲染，
+ * 保留点击跳档；web 8/列不触发，行为不变）。 */
+const TICK_WINDOW = 24;
+function tickWindow(files: number[]) {
+  if (files.length <= TICK_WINDOW) return { start: 0, list: files };
+  const pos = Math.max(0, files.indexOf(selected));
+  const half = Math.floor(TICK_WINDOW / 2);
+  const start = Math.max(0, Math.min(files.length - TICK_WINDOW, pos - half));
+  return { start, list: files.slice(start, start + TICK_WINDOW) };
+}
+/** 刻度条动态页数（M5d §5.6）：按钮数 = 当前列（流派）专辑数（≤TICK_WINDOW 滑窗）；
+ * 列切换/选档/水合后重建。 */
+let fileTicks: HTMLButtonElement[] = [];
+let tickKey = "";
+function rebuildTicks() {
+  const files = columnFiles(fileLocation(selected).lane);
+  const win = tickWindow(files);
+  const key = `${win.start}:${win.list.length}:${archiveColumns.length}`;
+  if (key === tickKey && fileTicks.length === win.list.length) return win;
+  tickKey = key;
+  $("#file-ticks").innerHTML = win.list
+    .map((index) => `<button data-select="${index}"></button>`)
+    .join("");
+  fileTicks = [...$("#file-ticks").querySelectorAll<HTMLButtonElement>("button")];
+  return win;
+}
+rebuildTicks();
 
 function setMode(next: Mode) {
   if (workbench?.enabled && next === "detail") next = "archive";
@@ -369,7 +438,7 @@ function setMode(next: Mode) {
   scene?.setMode(next === "boot" ? "hidden" : next);
   if (next !== "boot") {
     bootSequence.reset();
-    $(".file-title").firstChild!.textContent = "FILE NUMBER: ";
+    $("#file-title-prefix").textContent = wallCopy().filePrefix;
     $("#stage").dataset.boot = "done";
   }
   if (next === "detail" && previousMode !== "detail") {
@@ -384,11 +453,13 @@ function setMode(next: Mode) {
 }
 function select(index: number, navigation?: ArchiveNavigation) {
   selected = (index + records.length) % records.length;
-  columnMemory[fileLocation(selected).lane] = selected;
+  const lane = fileLocation(selected).lane;
+  columnMemory[lane] = selected;
   if (mode === "detail") setMode("archive");
-  activeTab = "overview";
+  activeTab = wallMode.hydrated ? "tracks" : "overview";
   scene?.select(selected, navigation);
   updateSelection(navigation);
+  albumWall.onSelectionChanged(selected);
   const columnMove = navigation && "axis" in navigation && navigation.axis === "lane";
   audio.play(columnMove ? "column" : "tick", columnMove ? navigation.direction * .45 : 0);
 }
@@ -406,9 +477,12 @@ function stepColumn(direction: number) {
   select(columnMemory[next], { axis: "lane", direction });
 }
 function updateSelection(navigation?: ArchiveNavigation) {
+  const win = rebuildTicks();
   const r = records[selected];
   const { lane } = fileLocation(selected);
   const files = columnFiles(lane);
+  const copy = wallCopy();
+  applyWallCopy(copy);
   selectionTitle.update({ text: r.title, animated: !prefs.reduced && mode === "archive" });
   clearanceTitle.update({ text: r.clearance, animated: !prefs.reduced && mode === "archive" });
   categoryTitle.update({ text: r.category, animated: !prefs.reduced && mode === "archive" });
@@ -432,6 +506,7 @@ function updateSelection(navigation?: ArchiveNavigation) {
         : "auto",
   });
   $(".count-total").textContent = String(files.length).padStart(2, "0");
+  $("#column-total").textContent = String(archiveColumns.length).padStart(2, "0");
   columnCounter.update({
     value: lane + 1,
     animated: !prefs.reduced && mode === "archive",
@@ -443,15 +518,86 @@ function updateSelection(navigation?: ArchiveNavigation) {
   columnTitle.update({ text: archiveColumns[lane], animated: !prefs.reduced && mode === "archive" });
   $<HTMLButtonElement>('[data-action="column-prev"]').disabled = false;
   $<HTMLButtonElement>('[data-action="column-next"]').disabled = false;
-  fileTicks.forEach((button, slot) => {
-    const index = files[slot], record = records[index];
+  win.list.forEach((index, slot) => {
+    const record = records[index];
+    const button = fileTicks[slot];
+    if (!button) return;
     button.dataset.select = String(index);
-    button.setAttribute("aria-label", `选择档案 ${record.id} ${record.title}`);
+    button.setAttribute("aria-label", `${copy.album ? "选择专辑" : "选择档案"} ${record.id} ${record.title}`);
     button.title = `${record.id} · ${record.title}`;
     button.classList.toggle("selected", index === selected);
     button.setAttribute("aria-pressed", String(index === selected));
   });
+  updateCalloutAlbum();
   $("#saved-count").textContent = String(saved.size).padStart(2, "0");
+}
+
+/** 页脚统计条（M5d 稿 1：LOCAL COLLECTION · N ALBUMS / M TRACKS）；水合态替换 JOYCE MOORE 位。 */
+async function updateFooterStats() {
+  const statsSpan = $("#footer-stats");
+  const userSpan = $("#footer-user");
+  if (!statsSpan || !userSpan) return;
+  if (!wallMode.hydrated) {
+    statsSpan.hidden = true;
+    userSpan.hidden = false;
+    return;
+  }
+  userSpan.hidden = true;
+  statsSpan.hidden = false;
+  try {
+    const result = (await bridge.call("library.stats", {}, 5000)) as Record<string, unknown> | null;
+    const albums = typeof result?.albums === "number" ? result.albums : records.length;
+    const tracks = typeof result?.tracks === "number" ? result.tracks : 0;
+    statsSpan.textContent = `LOCAL COLLECTION · ${albums} ALBUMS / ${tracks} TRACKS`;
+  } catch {
+    statsSpan.textContent = `LOCAL COLLECTION · ${records.length} ALBUMS`;
+  }
+}
+
+/**
+ * 阵列态右侧浮层扩展行（M5d 稿 1：艺术家行 + year/曲目数/总时长）+ 格式角标：
+ * 仅水合态显示（web 模式 hidden，逐字节保持上游 DOM）。浮层复用既有
+ * .archive-callout 的位置与淡入语言，新增两行/角标样式见 style.css M5d 组件段。
+ */
+function updateCalloutAlbum() {
+  const hydrated = wallMode.hydrated;
+  const r: ArchiveRecord | undefined = records[selected];
+  const sub = $("#callout-sub");
+  const meta = $("#callout-meta");
+  if (!hydrated || !r) {
+    sub.hidden = true;
+    meta.hidden = true;
+    return;
+  }
+  sub.hidden = false;
+  sub.textContent = r.department;
+  meta.hidden = false;
+  const tracks = r.trackCount ?? 0;
+  meta.innerHTML = `<span>${escapeHtml(r.date)}</span><i>／</i><span>${tracks} 首曲目</span><i>／</i><span>${formatDuration(r.durationMs)}</span>`;
+  const badge = $("#cover-badge");
+  const format = r.formats?.[0]?.toUpperCase();
+  if (format) {
+    badge.hidden = false;
+    badge.textContent = format;
+  } else badge.hidden = true;
+}
+
+/** 文案表落盘（水合/模式切换时刷新静态文案；旧 DOM 结构保留，只换字）。 */
+function applyWallCopy(copy = wallCopy()) {
+  $("#eyebrow-prefix").textContent = copy.eyebrow;
+  $("#column-word").textContent = copy.columnWord;
+  $("#select-label").textContent = copy.selectLabel;
+  $("#read-file-label").textContent = copy.openFile;
+  $("#archive-hint").innerHTML = copy.hint;
+  $("#back-label").textContent = copy.back;
+  $("#drag-caption").textContent = copy.dragCaption;
+  $("#caption-group").textContent = copy.captionGroup;
+  // 编号前缀：上游档案用 X-001（三位滚动号固定前缀）；专辑墙用纯序号（稿：ALBUM 002）。
+  document.querySelectorAll<HTMLElement>(".id-prefix").forEach((el) => {
+    el.textContent = copy.album ? "" : "X-";
+    el.hidden = copy.album;
+  });
+  $("#stage").dataset.wall = copy.album ? "album" : "archive";
 }
 function replayBoot(forcePreview = false) {
   if (!ready) return;
@@ -499,8 +645,13 @@ function toggleSaved() {
 function renderDetail() {
   tabTransition.cancel();
   const r = records[selected];
-  $("#object-id").textContent = "NO." + String(selected + 1).padStart(3, "0");
-  $("#detail-content").innerHTML = `
+  const hydrated = wallMode.hydrated;
+  $("#object-id").textContent = (hydrated ? "ALBUM " : "NO.") + String(selected + 1).padStart(3, "0");
+  const viewerButton = $<HTMLElement>(".viewer-open");
+  if (viewerButton) viewerButton.style.display = hydrated ? "none" : "";
+  $("#detail-content").innerHTML = hydrated
+    ? wallDetailMarkup(r)
+    : `
   <div class="detail-kicker"><span>FILE ${r.id}</span><span>${escapeHtml(r.clearance)}</span></div>
   <h2>${escapeHtml(r.en)}</h2><div class="detail-title-cn">${escapeHtml(r.title)}<span>${escapeHtml(r.category)}</span></div>
   <div class="detail-rule"></div>
@@ -512,7 +663,143 @@ function renderDetail() {
   $("#detail-content").setAttribute("tabindex", "-1");
   $('[data-action="bookmark"]').setAttribute("aria-pressed", String(saved.has(r.id)));
   documentDecryption.reset($("#detail-content"), prefs.reduced || !scene || scene.decryptionFrame.phase === "clear");
+  if (hydrated) {
+    if (activeTab !== "tracks" && activeTab !== "intro") activeTab = "tracks";
+    void ensureAlbumTracks(r);
+  } else if (activeTab !== "overview" && activeTab !== "notes" && activeTab !== "history") activeTab = "overview";
   setTab(activeTab, false);
+}
+
+/** 详情页八字段两列表格（AlbumDto 直读；null → "—"，禁硬编码）。 */
+function wallFields(r: ArchiveRecord): [string, string][] {
+  const dash = (v: string | number | null | undefined) =>
+    v === null || v === undefined || v === "" ? "—" : String(v);
+  const res = r.resolution ?? null;
+  const bit = res?.bit_depth ?? null;
+  const rate = res?.sample_rate ?? null;
+  const rateText = rate === null ? "—" : `${(rate / 1000).toFixed(1)} kHz`;
+  const resolution =
+    res === null
+      ? "—"
+      : bit === null
+        ? `${rate === null ? "—" : res.lossy ? "有损 " + rateText : rateText}（无位深标签）`
+        : `${bit} bit / ${rateText}`;
+  const bitrate = r.bitrateRange
+    ? `${Math.round(r.bitrateRange[0] / 1000)}–${Math.round(r.bitrateRange[1] / 1000)} kbps`
+    : "—";
+  return [
+    ["RELEASE / 发行年份", dash(r.year ?? (r.date !== "—" ? r.date : null))],
+    ["ARTIST / 歌手", dash(r.department)],
+    ["GENRE / 流派", dash(r.category)],
+    ["VOLUMES / 内含 CD", dash(r.discCount)],
+    ["FORMAT / 文件格式", dash(r.formats?.map((f) => f.toUpperCase()).join(" / "))],
+    ["RESOLUTION / 位深与采样率", resolution],
+    ["BITRATE / 码率", bitrate],
+    ["DURATION / 总时长", formatDuration(r.durationMs)],
+  ];
+}
+
+function wallDetailMarkup(r: ArchiveRecord) {
+  const fields = wallFields(r)
+    .map(([k, v]) => `<div><dt>${k}</dt><dd>${escapeHtml(v)}</dd></div>`)
+    .join("");
+  return `
+  <div class="detail-kicker"><span>ALBUM ${String(selected + 1).padStart(3, "0")}</span><span>${escapeHtml(r.clearance)}</span></div>
+  <h2>${escapeHtml(r.en)}</h2><div class="detail-title-cn">${escapeHtml(r.title)}<span>${escapeHtml(r.category)}</span></div>
+  <div class="detail-rule"></div>
+  <dl class="metadata wall-metadata">${fields}</dl>
+  <div class="detail-tabs" role="tablist"><button id="tab-tracks" class="active" role="tab" aria-controls="tab-panel" aria-selected="true" data-tab="tracks">01 <span>歌单</span></button><button id="tab-intro" role="tab" aria-controls="tab-panel" aria-selected="false" data-tab="intro">02 <span>专辑介绍</span></button><i class="tab-indicator" aria-hidden="true"></i></div>
+  <div id="tab-panel" class="tab-panel" role="tabpanel">${albumTracksPanel(r)}</div>
+  <div class="detail-actions"><button class="solid-button" data-action="bookmark">${saved.has(r.id) ? "− REMOVE FROM SAVED" : "＋ SAVE ALBUM"}<span>${saved.has(r.id) ? "已收藏" : "收藏专辑"}</span></button><a class="export-button" data-action="export-tracks" href="#" aria-label="导出 ${r.id} 曲目清单">EXPORT <span>↓</span></a></div>
+  <div class="detail-footnote"><span>LOCAL COLLECTION <i>／</i> ${escapeHtml(r.category)}</span><span>${String(selected + 1).padStart(3, "0")} / ${String(records.length).padStart(3, "0")}</span></div>`;
+}
+
+/* —— 歌单页签：library.query scope=tracks filter.album（协议 v1.4，壳侧 LIKE 子串）。 —— */
+type WallTrackRow = {
+  id: number;
+  title: string | null;
+  artist: string | null;
+  codec: string | null;
+  duration_ms: number | null;
+  disc_no: number | null;
+  track_no: number | null;
+};
+const playlistCache = new Map<string, { rows: WallTrackRow[]; loading: boolean; failed: boolean }>();
+/** 详情重绘票据：异步歌单回填前核对“仍是那次渲染”（防切档后串档）。 */
+let detailRenderTicket = 0;
+
+function albumTracksPanel(r: ArchiveRecord): string {
+  if (!r.albumKey) return `<div class="panel-label">TRACKS / 歌单</div><p class="log-note">本档案无曲库条目。</p>`;
+  const cached = playlistCache.get(r.albumKey);
+  if (!cached) return `<div class="panel-label">TRACKS / 歌单</div><ol class="track-list"><li class="track-row track-row-loading"><span>—</span><span>载入中…</span></li></ol>`;
+  return trackRowsMarkup(r, cached.rows);
+}
+function trackRowsMarkup(r: ArchiveRecord, rows: WallTrackRow[]): string {
+  if (rows.length === 0)
+    return `<div class="panel-label">TRACKS / 歌单</div><p class="log-note">该专辑暂无可列曲目。</p>`;
+  return `<div class="panel-label">TRACKS / 歌单 · ${rows.length} 首</div><ol class="track-list">${rows
+    .map(
+      (t, i) =>
+        `<li><button class="track-row" data-track-play="${t.id}" data-track-title="${escapeHtml(t.title ?? "")}" aria-label="播放 ${escapeHtml(t.title ?? "")}"><span class="tr-no">${String(t.track_no ?? i + 1).padStart(2, "0")}</span><span class="tr-title">${escapeHtml(t.title ?? "—")}</span><span class="tr-artist">${escapeHtml(t.artist ?? r.department)}</span><span class="tr-format">${escapeHtml((t.codec ?? r.formats?.[0] ?? "—").toUpperCase())}</span><span class="tr-dur">${formatDuration(t.duration_ms)}</span></button></li>`,
+    )
+    .join("")}</ol>`;
+}
+/** 专辑名 → 曲目行（壳侧 filter.album 为 LIKE 子串，取完 rows 后前端按 album 全等收紧）。 */
+async function ensureAlbumTracks(r: ArchiveRecord) {
+  const key = r.albumKey;
+  if (!key || playlistCache.has(key)) return;
+  playlistCache.set(key, { rows: [], loading: true, failed: false });
+  const ticket = ++detailRenderTicket;
+  try {
+    const result = (await bridge.call(
+      "library.query",
+      { scope: "tracks", filter: { album: r.title }, limit: 200, sort: "album" },
+      15000,
+    )) as { items?: unknown[]; total?: number } | null;
+    const items = Array.isArray(result?.items) ? result!.items : [];
+    const rows: WallTrackRow[] = items
+      .map((raw) => {
+        const o = (raw ?? {}) as Record<string, unknown>;
+        const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+        const s = (v: unknown) => (typeof v === "string" ? v : null);
+        return {
+          id: n(o.id) ?? -1,
+          title: s(o.title),
+          artist: s(o.artist),
+          codec: s(o.codec),
+          duration_ms: n(o.duration_ms),
+          disc_no: n(o.disc_no),
+          track_no: n(o.track_no),
+          albumName: s(o.album),
+        };
+      })
+      .filter((t) => t.id >= 0 && (t.albumName === null || t.albumName === r.title))
+      .sort(
+        (a, b) =>
+          (a.disc_no ?? 1) - (b.disc_no ?? 1) ||
+          (a.track_no ?? 0) - (b.track_no ?? 0) ||
+          (a.title ?? "").localeCompare(b.title ?? ""),
+      )
+      .map(({ albumName: _drop, ...rest }) => rest);
+    playlistCache.set(key, { rows, loading: false, failed: false });
+  } catch {
+    playlistCache.set(key, { rows: [], loading: false, failed: true });
+  }
+  if (ticket !== detailRenderTicket) return;
+  if (wallMode.hydrated && mode === "detail" && records[selected].albumKey === key) {
+    const panel = $("#tab-panel");
+    if (activeTab === "tracks") {
+      panel.innerHTML = trackRowsMarkup(records[selected], playlistCache.get(key)!.rows);
+      documentDecryption.refresh();
+    }
+  }
+}
+function introPanel(r: ArchiveRecord) {
+  const bits: string[] = [];
+  if (r.year) bits.push(`${r.year} 年发行`);
+  if (r.category) bits.push(`流派 ${r.category}`);
+  bits.push("RHINE LAB LOCAL COLLECTION");
+  return `<div class="panel-label">NOTES / 专辑介绍</div><p>${escapeHtml(bits.join(" · "))}。${escapeHtml(r.abstract)}</p><p class="log-note">曲库暂无专辑介绍字段（DB 无对应标签），以上由专辑元数据生成；介绍文案待 M6 补充。</p>`;
 }
 function overview() {
   return `<div class="panel-label">ABSTRACT / 摘要</div><p>${escapeHtml(records[selected].abstract)}</p>`;
@@ -532,8 +819,11 @@ function setTab(tab: string, sound = true) {
   indicator.style.transition = sound ? "" : "none";
   indicator.style.transform = `translateX(${tabButton.offsetLeft}px) scaleX(${tabButton.offsetWidth})`;
   $("#tab-panel").setAttribute("aria-labelledby", tabButton.id);
-  $("#tab-panel").innerHTML =
-    tab === "overview"
+  $("#tab-panel").innerHTML = wallMode.hydrated
+    ? tab === "intro"
+      ? introPanel(r)
+      : albumTracksPanel(r)
+    : tab === "overview"
       ? overview()
       : tab === "notes"
         ? `<div class="panel-label">RESEARCH NOTES / 研究记录</div><ol class="research-notes">${r.findings.map((f, i) => `<li><span>${String(i + 1).padStart(2, "0")}</span>${escapeHtml(f)}</li>`).join("")}</ol>`
@@ -561,6 +851,34 @@ function notify(message: string) {
   toastTimer = setTimeout(() => $("#toast").classList.remove("visible"), 2600);
 }
 
+/** 导出专辑曲目清单（M5d：替代上游预生成 TXT，前端 Blob 即时生成；无歌单缓存时导出元数据头）。 */
+function exportAlbumTracks() {
+  const r = records[selected];
+  const cached = r.albumKey ? playlistCache.get(r.albumKey) : undefined;
+  const lines = [
+    `RHINE LAB · LOCAL COLLECTION`,
+    `ALBUM: ${r.title}`,
+    `ARTIST: ${r.department}`,
+    ...wallFields(r).map(([k, v]) => `${k}: ${v}`),
+    ``,
+    ...(cached?.rows.length
+      ? cached.rows.map(
+          (t, i) =>
+            `${String(t.track_no ?? i + 1).padStart(2, "0")}. ${t.title ?? "—"}\t${t.artist ?? r.department}\t${(t.codec ?? "—").toUpperCase()}\t${formatDuration(t.duration_ms)}`,
+        )
+      : ["（歌单未加载或曲库不可用）"]),
+  ];
+  const blob = new Blob(["\ufeff" + lines.join("\r\n") + "\r\n"], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `RHINE-ALBUM-${r.id}.txt`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  audio.play("confirm");
+  notify(`已导出《${r.title}》曲目清单`);
+}
+
 function openModal(kind: NonNullable<typeof modal>) {
   if (!ready) return;
   if (!modal) {
@@ -573,7 +891,7 @@ function openModal(kind: NonNullable<typeof modal>) {
   modalClosing = false;
   modal = kind;
   searchQuery = "";
-  filter = "全部档案";
+  filter = categories[0] ?? "全部档案";
   audio.play("page-open");
   renderModal();
 }
@@ -629,7 +947,7 @@ function renderResults() {
     .filter(
       ({ r }) =>
         (modal !== "saved" || saved.has(r.id)) &&
-        (filter === "全部档案" || r.category === filter) &&
+        (filter === categories[0] || r.category === filter) &&
         `${r.id} ${r.title} ${r.en} ${r.department} ${r.lead}`
           .toLowerCase()
           .includes(searchQuery.toLowerCase()),
@@ -659,7 +977,14 @@ function motionSettingsMarkup() {
     : "当前使用完整动效。"}</p>${prefs.reduced ? '<button data-action="enable-motion">启用完整动效并重播 ↻</button>' : ""}</div>`;
 }
 function settingsMarkup() {
-  return `<h2>SYSTEM SETTINGS<small>终端偏好设置</small></h2><p class="settings-intro">JOYCE MOORE <span>·</span> SESSION AUTHORIZED</p>${isWallpaper ? '<p class="wallpaper-settings-note">每次启动都会读取 Wallpaper Engine 中的设置。在此修改仅对当前运行生效，无法持久保存；如需保留，请在 Wallpaper Engine 的壁纸属性中调整。</p>' : ""}<div class="settings-list">${themeSettingsMarkup(prefs.colorTheme === "dark")}${!isWallpaper ? `<label><div><strong>SUPER PERFORMANCE</strong><span>降低三维画质和渲染分辨率，保留完整动效；关闭后恢复原画质</span></div><input type="checkbox" data-pref="superPerformance" ${prefs.superPerformance ? "checked" : ""}/><i class="toggle"></i></label>` : ""}${workbench?.settingsMarkup() ?? ""}${audioSettingsMarkup(prefs)}<label><div><strong>REDUCED MOTION</strong><span>跳过开机动画，简化选档、镜头和文字动效</span></div><input type="checkbox" data-pref="reduced" ${prefs.reduced ? "checked" : ""}/><i class="toggle"></i></label></div>${motionSettingsMarkup()}${qualityMarkup(prefs.rendering)}${pwaSettingsMarkup()}<div class="settings-shortcuts">${isWallpaper ? '<span>DESKTOP CONTROLS</span><p>拖动阵列或点击界面按钮浏览档案。桌面模式下，方向键与滚轮可能无法传入壁纸。</p>' : '<span>KEYBOARD CONTROLS</span><p><kbd>←</kbd><kbd>→</kbd> 切列 <kbd>↑</kbd><kbd>↓</kbd> 选档 <kbd>ENTER</kbd> 读取 <kbd>/</kbd> 检索 <kbd>ESC</kbd> 返回</p>'}</div><div class="settings-bottom">${!isWallpaper && document.fullscreenEnabled ? '<button data-action="fullscreen">FULLSCREEN <span>↗</span></button>' : ''}<button data-action="restart">REINITIALIZE SYSTEM <span>↻</span></button></div><div class="modal-bottom"><span>ANALYSIS OS / 1.0 · 使用 MiSans 字体（小米） <a href="${assetUrl("fonts/MiSans-license.pdf")}" target="_blank" rel="noopener">字体许可</a></span><span>POWERED BY RHINE LAB</span></div>`;
+  const coverState = albumWall.state;
+  const coverChoices = [["textures", "纹理"], ["selected", "仅选中卡"], ["off", "关闭"]]
+    .map(([mode, label]) => `<button type="button" data-cover-mode="${mode}" aria-pressed="${coverState.userMode === mode}">${label}</button>`)
+    .join("");
+  const coverNote = coverState.autoDegrading
+    ? `<span class="cover-degrade-reason">⚠ ${escapeHtml(albumWall.degradeReasonText(coverState.reason))}</span>`
+    : `<span>选中卡展示曲库封面；自动降级仅在纹理泄漏/帧预算/GPU/通路故障时停用，改回任一档即恢复</span>`;
+  return `<h2>SYSTEM SETTINGS<small>终端偏好设置</small></h2><p class="settings-intro">JOYCE MOORE <span>·</span> SESSION AUTHORIZED</p>${isWallpaper ? '<p class="wallpaper-settings-note">每次启动都会读取 Wallpaper Engine 中的设置。在此修改仅对当前运行生效，无法持久保存；如需保留，请在 Wallpaper Engine 的壁纸属性中调整。</p>' : ""}<div class="settings-list">${themeSettingsMarkup(prefs.colorTheme === "dark")}<div class="cover-settings"><div><strong>ALBUM WALL COVERS</strong>${coverNote}</div><div class="theme-choices">${coverChoices}</div></div>${!isWallpaper ? `<label><div><strong>SUPER PERFORMANCE</strong><span>降低三维画质和渲染分辨率，保留完整动效；关闭后恢复原画质</span></div><input type="checkbox" data-pref="superPerformance" ${prefs.superPerformance ? "checked" : ""}/><i class="toggle"></i></label>` : ""}${workbench?.settingsMarkup() ?? ""}${audioSettingsMarkup(prefs)}<label><div><strong>REDUCED MOTION</strong><span>跳过开机动画，简化选档、镜头和文字动效</span></div><input type="checkbox" data-pref="reduced" ${prefs.reduced ? "checked" : ""}/><i class="toggle"></i></label></div>${motionSettingsMarkup()}${qualityMarkup(prefs.rendering)}${pwaSettingsMarkup()}<div class="settings-shortcuts">${isWallpaper ? '<span>DESKTOP CONTROLS</span><p>拖动阵列或点击界面按钮浏览档案。桌面模式下，方向键与滚轮可能无法传入壁纸。</p>' : '<span>KEYBOARD CONTROLS</span><p><kbd>←</kbd><kbd>→</kbd> 切列 <kbd>↑</kbd><kbd>↓</kbd> 选档 <kbd>ENTER</kbd> 读取 <kbd>/</kbd> 检索 <kbd>ESC</kbd> 返回</p>'}</div><div class="settings-bottom">${!isWallpaper && document.fullscreenEnabled ? '<button data-action="fullscreen">FULLSCREEN <span>↗</span></button>' : ''}<button data-action="restart">REINITIALIZE SYSTEM <span>↻</span></button></div><div class="modal-bottom"><span>ANALYSIS OS / 1.0 · 使用 MiSans 字体（小米） <a href="${assetUrl("fonts/MiSans-license.pdf")}" target="_blank" rel="noopener">字体许可</a></span><span>POWERED BY RHINE LAB</span></div>`;
 }
 
 document.addEventListener("input", (e) => {
@@ -700,6 +1025,19 @@ document.addEventListener("change", (e) => {
 document.addEventListener("click", (e) => {
   const themeButton = (e.target as Element).closest<HTMLElement>("[data-color-theme]");
   if (themeButton) { prefs.colorTheme = themeButton.dataset.colorTheme === "dark" ? "dark" : "light"; savePrefs(); return; }
+  const coverButton = (e.target as Element).closest<HTMLElement>("[data-cover-mode]");
+  if (coverButton) {
+    albumWall.setUserMode(coverButton.dataset.coverMode as "textures" | "selected" | "off");
+    // 重绘设置里的三态按钮与降级原因（不重建整个面板，避免焦点丢失）。
+    document.querySelectorAll<HTMLElement>("[data-cover-mode]").forEach(b =>
+      b.setAttribute("aria-pressed", String(b.dataset.coverMode === albumWall.userMode)));
+    const note = document.querySelector(".cover-settings span");
+    if (note) note.textContent = albumWall.state.autoDegrading
+      ? `⚠ ${albumWall.degradeReasonText(albumWall.state.reason)}`
+      : "选中卡展示曲库封面；自动降级仅在纹理泄漏/帧预算/GPU/通路故障时停用，改回任一档即恢复";
+    audio.play("confirm");
+    return;
+  }
   if (!started) return;
   if (modalClosing) return;
   const el = (e.target as Element).closest<HTMLElement>("button");
@@ -714,6 +1052,30 @@ document.addEventListener("click", (e) => {
       select(index);
       openFile();
     });
+    return;
+  }
+  // 专辑墙：歌单行点击 → engine.play lib:<id>（壳侧解析为 file:<path>，协议 §5.1）。
+  const trackRow = el.closest<HTMLElement>("[data-track-play]");
+  if (trackRow && mode === "detail" && wallMode.hydrated) {
+    const id = trackRow.dataset.trackPlay;
+    const title = trackRow.dataset.trackTitle || "";
+    const durText = trackRow.querySelector(".tr-dur")?.textContent?.trim() ?? "";
+    const parts = durText.split(":").map((p) => Number(p));
+    const durationMs =
+      parts.length >= 2 && parts.every((n) => Number.isFinite(n))
+        ? (parts.length === 3
+            ? parts[0] * 3600 + parts[1] * 60 + parts[2]
+            : parts[0] * 60 + parts[1]) * 1000
+        : 180_000;
+    void import("./player/player-store").then(({ playerStore }) =>
+      playerStore.play(`lib:${id}`, durationMs),
+    );
+    notify(title ? `正在播放：${title}` : "正在播放…");
+    return;
+  }
+  if (el.dataset.action === "export-tracks") {
+    e.preventDefault();
+    exportAlbumTracks();
     return;
   }
   if (el.dataset.filter) {
@@ -776,7 +1138,7 @@ document.addEventListener("click", (e) => {
   if (action === "reset-search") {
     modal = "search";
     searchQuery = "";
-    filter = "全部档案";
+    filter = categories[0] ?? "全部档案";
     renderModal();
   }
   if (action === "replay" || action === "restart") {
@@ -837,9 +1199,9 @@ document.addEventListener("keydown", (e) => {
     ["ArrowLeft", "ArrowRight"].includes(e.key)
   ) {
     e.preventDefault();
-    const tabs = ["overview", "notes", "history"];
+    const tabs = wallMode.hydrated ? ["tracks", "intro"] : ["overview", "notes", "history"];
     setTab(
-      tabs[(tabs.indexOf(activeTab) + (e.key === "ArrowRight" ? 1 : 2)) % 3],
+      tabs[(tabs.indexOf(activeTab) + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length],
     );
     $<HTMLButtonElement>(`[data-tab="${activeTab}"]`).focus();
     return;
@@ -910,10 +1272,10 @@ function bootFrame(t: number) {
     $("#stage").dataset.boot = step;
     lastStep = step;
   }
-  $(".file-title").firstChild!.textContent =
+  $("#file-title-prefix").textContent =
     step === "array"
       ? "SELECTING FILES...".slice(0, Math.max(0, Math.floor((t - 21.94) * 18)))
-      : "FILE NUMBER: ";
+      : wallCopy().filePrefix;
   $("#stage").style.setProperty(
     "--entry-opacity",
     String(ease((t - 21.9) / 0.13)),
@@ -938,10 +1300,13 @@ document.fonts.addEventListener("loadingdone", () => documentDecryption.refresh(
 let lastTime = 0,
   frameCount = 0,
   frameStart = performance.now(),
-  fps = 0;
+  fps = 0,
+  lastFrameMs = 0;
 function frame(ms: number) {
   if (!wallpaperFrame(ms)) { requestAnimationFrame(frame); return; }
   if (document.hidden) { requestAnimationFrame(frame); return; }
+  albumWall.frameSample(ms - lastFrameMs, ms);
+  lastFrameMs = ms;
   workbench?.tick();
   const time = ms / 1000;
   const theme = scene?.themeAmount ?? (prefs.colorTheme === "dark" ? 1 : 0);
@@ -988,6 +1353,7 @@ function frame(ms: number) {
   requestAnimationFrame(frame);
 }
 function bindScene(scene: ArchiveScene, cell?: { lane: number; row: number }) {
+    albumWall.attach(scene); // M5d：封面缓存/降级观测跟随场景重建（3D 开关重载路径同构）
     scene.select(selected, cell ? { cell } : undefined);
     scene.onSelect = (i, cell) => {
       if (mode !== "archive" || modal || viewer?.isOpen) return;
@@ -1030,6 +1396,7 @@ function syncThreeButton() {
 }
 function releaseThree() {
   if (!scene) return;
+  albumWall.detach();
   resumeCell = { ...scene.getStats().selectedCell }; resumeSelection = selected;
   viewer?.dispose(); viewer = undefined;
   scene.dispose(); scene = undefined;
@@ -1084,6 +1451,12 @@ async function toggleThree() {
 async function start() {
   try {
     if (isWallpaper) await window.rhineWallpaperPropertiesReady;
+    // M5d desktop：等曲库水合完成再建阵列（web/壁纸 = 已完成的 Promise，零延迟零行为变化）。
+    await wallSession.hydration;
+    await albumWall.loadConfig(); // wall.covers 三态（web/壁纸 = 同步回退，无额外延迟）
+    rebuildColumnMemory();
+    updateFooterStats();
+    updateSelection();
     if (!isWallpaper || wallpaperHost()?.properties.load3donstartup?.value !== false) {
       scene = new ArchiveScene($("#three-scene"));
       scene.setTheme(prefs.colorTheme === "dark", true);
@@ -1258,6 +1631,30 @@ Object.assign(window, {
       saved: [...saved],
       audio: audio.stats(),
       wallpaper: isWallpaper ? wallpaperHost() : null,
+      // M5d 专辑墙探针（CDP 验收：水合态/选中卡封面/浮层一致性）。
+      wall: {
+        hydrated: wallMode.hydrated,
+        columns: archiveColumns.length,
+        records: records.length,
+        selected: fileLocation(selected),
+        selectedRecord: (() => {
+          const r = records[selected];
+          return r && {
+            id: r.id,
+            title: r.title,
+            artist: r.department,
+            genre: r.category,
+            year: r.year ?? null,
+            trackCount: r.trackCount ?? 0,
+            durationMs: r.durationMs ?? 0,
+            formats: r.formats ?? [],
+            coverKey: r.coverKey ?? null,
+            albumKey: r.albumKey ?? null,
+          };
+        })(),
+        columnFiles: columnFiles(fileLocation(selected).lane).length,
+        cover: albumWall.snapshot(),
+      },
     }),
   },
 });
