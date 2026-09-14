@@ -1,5 +1,6 @@
 ; Rhine Lab Music Player — Inno Setup 安装器脚本（M6）
 ; 由 scripts/package.ps1 调用：ISCC /Qp /DAppVersion=x /DStageDir=y /DOutDir=z rhine.iss
+; 工具兼容：Inno Setup 6.4+（实测 6.7.3；ISPP/#ifexists、x64compatible 需 ≥6.4），7.x 同样可用。
 ; Inno Setup 是**构建期工具**（自有 BSD 风格许可），其产物不含可分发的工具运行时 → 不污染产品许可树。
 #ifndef AppVersion
   #define AppVersion "0.0.0"
@@ -31,7 +32,13 @@ UninstallDisplayIcon={app}\RhineShell.exe
 CloseApplications=force
 
 [Languages]
+; 中文语言包（ChineseSimplified.isl）在官方安装包中属**非默认分发**件（6.7/7.x 只带西文系），
+; 需从 jrsoftware.org/files/isl 单独下载放 compiler:Languages\。
+; package.ps1 探测到才传 /DHasChinese；缺失时回退英文向导，不阻塞打包（lane F 实测定案 2026-09-14：
+; ISPP 无 #ifexists 指令，存在性判断上提到调用方）。
+#ifdef HasChinese
 Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+#endif
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
@@ -52,19 +59,15 @@ Filename: "{app}\RhineShell.exe"; Description: "{cm:LaunchProgram,Rhine Lab Musi
 // 运行前置检测：.NET 10 Desktop 运行时（HKLM 64/32 与 HKCU 的 sharedfx 三处都查）与 WebView2 Runtime。
 // 缺失不静默安装（Q8 纯净原则 + 用户可审），只在完成页前给出明确指引。
 function DotNetDesktopOk: Boolean;
-var
-  paths: array of String;
-  i: Integer;
 begin
   // 任一 sharedfx 键存在即视为已装 10.x Desktop Runtime（版本子键枚举代价高，交给运行时自证：
-  // 真缺时壳根本起不来，README 已写明前置）。
-  Result := False;
-  paths := CreateArray(
-    'SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App',
-    'SOFTWARE\WOW6432Node\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App',
-    'SOFTWARE\dotnet\Setup\InstalledVersions\x86\sharedfx\Microsoft.WindowsDesktop.App');
-  for i := 0 to GetArrayLength(paths) - 1 do
-    if RegKeyExists(HKLM, paths[i]) or RegKeyExists(HKCU, paths[i]) then Exit(True);
+  // 真缺时壳根本起不来，README 已写明前置）。不用数组/CreateArray（Inno 6.x Pascal 无此库函数，
+  // lane F 实测编译报错），直接三项短路判断。
+  Result :=
+    RegKeyExists(HKLM, 'SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App') or
+    RegKeyExists(HKCU, 'SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App') or
+    RegKeyExists(HKLM, 'SOFTWARE\WOW6432Node\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App') or
+    RegKeyExists(HKLM, 'SOFTWARE\dotnet\Setup\InstalledVersions\x86\sharedfx\Microsoft.WindowsDesktop.App');
 end;
 
 function WebView2Ok: Boolean;

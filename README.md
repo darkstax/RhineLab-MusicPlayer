@@ -169,6 +169,21 @@ npm run preview
 
 生产文件输出到 `dist/`，可以交给静态 HTTP 服务托管。请通过服务地址访问，不要直接双击 `dist/index.html`。
 
+## 桌面版（Windows 壳 + 音频核心）
+
+除网页/PWA 外，本项目提供 **Windows 桌面版**：WPF 壳（WebView2 承载本仓库前端）+ C++ 音频核心
+（miniaudio/WASAPI，支持 FLAC/MP3/WAV 本地曲库、任务栏歌词、SMTC 媒体卡）。壳与核心经命名管道
+JSON Lines 协议通信（契约见 [`docs/IPC-PROTOCOL.md`](docs/IPC-PROTOCOL.md)）；曲库、设置与诊断页在
+桌面模式内提供。
+
+- **运行前置（目标机）**：Windows 10/11 x64、**.NET 10 Desktop Runtime**、**WebView2 Runtime**
+  （Win11 自带；缺失时安装器与包内 README 给出下载指引，不静默安装）。
+- **构建前置（构建机）**：在网页版工具链（Node ≥22.12）之外，另需 .NET SDK 10、VS Build Tools
+  （C++）与 CMake；出 **exe 安装器**需 **Inno Setup 6.4+/7**（缺则 `package.ps1` 只出 zip 并 WARN）。
+- **一键打包**：`pwsh scripts/package.ps1` → `dist-release\RhineMusic-win-x64-<ver>.zip`（便携）
+  与 `RhineMusic-<ver>-x64-setup.exe`（安装器，每用户免管理员），版本单一源 `version.json`。
+- 发布流程、检查清单与已知停点见 [`docs/RELEASE.md`](docs/RELEASE.md)。
+
 ## 操作说明
 
 ### 终端与档案
@@ -286,7 +301,7 @@ node scripts/check-quality.mjs
 
 ## 开源许可
 
-本项目自行编写且有权授权的程序代码、建模脚本及配套技术文档采用 [MIT License](LICENSE)，版权署名为 **Copyright (c) 2026 LBEILC**。你可以使用、修改、分发这些内容，也可以将其用于商业或闭源项目；分发代码或其重要部分时，须保留版权声明和许可证。软件按原样提供，不作担保，具体以许可证全文为准。
+本项目自行编写且有权授权的程序代码、建模脚本及配套技术文档采用 [MIT License](LICENSE)，版权署名为 **Copyright (c) 2026 StarL / darkstax**。你可以使用、修改、分发这些内容，也可以将其用于商业或闭源项目；分发代码或其重要部分时，须保留版权声明和许可证。软件按原样提供，不作担保，具体以许可证全文为准。桌面版与依赖的完整第三方许可清单见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
 
 MIT 授权不覆盖第三方权利或自动覆盖仓库内全部素材：
 

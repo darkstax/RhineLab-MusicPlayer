@@ -35,9 +35,13 @@ function Say([string]$m) { Write-Host "=== $m ===" -ForegroundColor Cyan }
 # —— 1. 构建（复用既有脚本；产物在仓库 dist-host\ 与 dist\）——
 if (-not $SkipBuild) {
   Say 'build (m-build + m2-build)'
+  # 统一走 PowerShell 7（pwsh）：Windows PowerShell 5.1 对 Bypass+中文脚本+UNC 兼容差，
+  # 且项目其余链（m-verify 等）均以 pwsh 为准。
+  $pwsh = (Get-Command pwsh.exe -ErrorAction SilentlyContinue)?.Source
+  if (-not $pwsh) { $pwsh = 'powershell.exe' }
   foreach ($s in 'm-build.ps1', 'm2-build.ps1') {
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "scripts\$s") *> $null
-    if ($LASTEXITCODE -ne 0) { throw "$s failed (exit $LASTEXITCODE)" }
+    & $pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "scripts\$s") *> $null
+    if ($LASTEXITCODE -ne 0) { throw "$s failed (exit $LASTEXITCODE) — 单独重跑看输出：pwsh scripts\$s" }
   }
 }
 foreach ($p in 'dist-host\RhineShell.exe', 'dist-host\core\RhineCore.exe', 'dist\index.html') {
@@ -79,17 +83,28 @@ Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -Compression
 
 # —— 4. exe 安装器（Inno 是构建期工具，缺则 WARN 不阻塞）——
 $exe = $null
+# Inno Setup 查找：Program Files（机器级）→ 用户目录（winget 无管理员时的默认落点，
+# 2026-09-14 实测 JRSoftware.InnoSetup 6.7.3 装在 %LOCALAPPDATA%\Programs\Inno Setup 6）。
 $iscc = @('C:\Program Files (x86)\Inno Setup 7\ISCC.exe', 'C:\Program Files\Inno Setup 7\ISCC.exe',
-          'C:\Program Files (x86)\Inno Setup 6\ISCC.exe', 'C:\Program Files\Inno Setup 6\ISCC.exe') |
+          'C:\Program Files (x86)\Inno Setup 6\ISCC.exe', 'C:\Program Files\Inno Setup 6\ISCC.exe',
+          (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 7\ISCC.exe'),
+          (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe')) |
   Where-Object { Test-Path $_ } | Select-Object -First 1
 if ($iscc) {
   Say "inno setup ($iscc)"
-  & $iscc /Qp "/DAppVersion=$ver" "/DStageDir=$stage" "/DOutDir=$OutDir" (Join-Path $repo 'installer\rhine.iss') 2>&1 | Tee-Object -FilePath $log | Out-Host
+  # 中文向导语言包是官方非默认分发件：探测到才传 /DHasChinese（iss 内 #ifdef 守卫）。
+  $islArgs = @()
+  if (Test-Path -LiteralPath (Join-Path (Split-Path $iscc) 'Languages\ChineseSimplified.isl')) {
+    $islArgs += '/DHasChinese=1'
+  } else {
+    Write-Host 'note: ChineseSimplified.isl 不在 Inno 语言目录——安装器用英文向导（jrsoftware.org/files/isl 可补）' -ForegroundColor DarkGray
+  }
+  & $iscc /Qp "/DAppVersion=$ver" "/DStageDir=$stage" "/DOutDir=$OutDir" @islArgs (Join-Path $repo 'installer\rhine.iss') 2>&1 | Tee-Object -FilePath $log | Out-Host
   if ($LASTEXITCODE -ne 0) { throw "ISCC failed (exit $LASTEXITCODE), see $log" }
   $exe = Join-Path $OutDir "RhineMusic-$ver-x64-setup.exe"
   if (-not (Test-Path -LiteralPath $exe)) { throw "installer not found at $exe" }
 } else {
-  Write-Host 'WARN: ISCC.exe not found — zip only（安装器需 Inno Setup 7，README/RELEASE.md 有构建前置说明）' -ForegroundColor Yellow
+  Write-Host 'WARN: ISCC.exe not found — zip only（安装器需 Inno Setup 6.4+/7，README/RELEASE.md 有构建前置说明）' -ForegroundColor Yellow
 }
 
 # —— 5. 汇总 + 哈希 ——
