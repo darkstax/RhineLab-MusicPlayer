@@ -74,6 +74,11 @@
    （9240/9250/9260）、**独立镜像目录**（`m-verify -MirrorRoot %LOCALAPPDATA%\RhineMusic\work-<lane>`）。
    ⚠ 并行 `m-verify` 目前**不共享构建产物**（各自镜像各自编），CPU/IO 会互相干扰
    → **CPU 采样类断言只在串行阶段跑**（`-Level quick` 可并行，`full` 含 CPU 采样需串行）。
+   ⚠⚠ **教训（M6 E/F 派单后补）**：m-verify 的 scenario 管道名与默认 MirrorRoot 是**全局固定**的——
+   两条泳道同时跑 m-verify 必互踩（robocopy /MIR 互写 + 管道占用假失败）。派单时要么错开
+   m-verify 时机（谁先完成谁跑，另一方由主进程合并后统一跑），要么任务书写死
+   `-MirrorRoot ...\work-<lane>` 且接受 scenario 管道冲突重试。本批 E/F 按"冲突即由主进程
+   合并验收时统一复跑"处理，泳道内 FAIL 不算产品缺陷。
 
 ### 并行度上限
 同时最多 **2 条实现泳道 + 1 条纯文档泳道**。原因：本会话实测 Windows 侧构建（dotnet+cmake）
