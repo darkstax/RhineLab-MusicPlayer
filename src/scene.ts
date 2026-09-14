@@ -17,7 +17,7 @@ import { applyTextureQuality, resizeQuality } from "./quality-renderer";
 import { CardAppearance } from "./appearance";
 import { configureInternalOptics } from "./internal-optics";
 import { DecryptionController } from "./decryption";
-import { fileAtSlot, fileLocation } from "./data";
+import { archiveColumns, fileAtSlot, fileLocation, getSlotStride, ROW_OFFSET } from "./data";
 import {
   cellKey,
   sameCell,
@@ -71,6 +71,9 @@ export class ArchiveScene {
   dispose() {
     this.inputEvents.abort();
     this.cancelPointer();
+    this.coverHolding?.release();
+    this.coverHolding = null;
+    this.coverKeyInternal = null;
     disposeThreeTree(this.scene);
     this.appearance.disposeSources();
     this.model.clear();
@@ -114,6 +117,51 @@ export class ArchiveScene {
   private themeAttribute?: THREE.InstancedBufferAttribute;
   get themeAmount() { return this.theme.background(performance.now() / 1000); }
   setTheme(dark: boolean, immediate = false) { this.theme.set(dark, performance.now() / 1000, this.selectedCell, immediate); }
+  /**
+   * 封面换绑（M5d，接线层驱动；texture 实例归 covers/texture-cache 的 LRU）：
+   * 传 null → 摘图回素面（旧 holding 必须 release，否则缓存引用泄漏）。
+   * 材质不走 themeMaterial 调色分支——暗色下封面保持饱和（设计稿硬要求）。
+   */
+  setCoverEnabled(enabled: boolean) {
+    this.coverEnabled = enabled;
+    if (!enabled && this.coverMesh) this.coverMesh.visible = false;
+  }
+  setCoverTexture(
+    holding: { texture: THREE.Texture; release: () => void } | null,
+    key: string | null = null,
+  ) {
+    this.coverTicket++;
+    this.coverHolding?.release();
+    this.coverHolding = holding;
+    this.coverKey = key;
+    if (!this.coverMesh) return;
+    const material = this.coverMesh.material as THREE.MeshBasicMaterial;
+    // 旧 map 由 LRU 缓存拥有：只摘引用不 dispose（重复 dispose 会让同 key 再命中时拿到死纹理）。
+    material.map = holding ? holding.texture : null;
+    material.needsUpdate = true;
+    this.coverMesh.visible = this.coverVisible();
+  }
+  private coverVisible() {
+    return (
+      this.coverEnabled &&
+      Boolean(this.coverHolding) &&
+      this.presence > 0.02 &&
+      !this.presentationHidden
+    );
+  }
+  /** 当前选中卡封面纹理（CDP 验收探针；非 null = map 已上）。 */
+  get coverTexture(): THREE.Texture | null {
+    return (
+      (this.coverMesh?.material as THREE.MeshBasicMaterial | undefined)?.map ?? null
+    );
+  }
+  get coverKey(): string | null {
+    return this.coverKeyInternal;
+  }
+  set coverKey(value: string | null) {
+    this.coverKeyInternal = value;
+  }
+  private coverKeyInternal: string | null = null;
   private playfield = { enabled: false, bands: quietBands(), strength: 1, flatten: 0, target: null as string | null, breathing: true };
   private flatMix = 0;
   private rhythm = new RhythmMotion();
@@ -225,6 +273,17 @@ export class ArchiveScene {
   private loaded = false;
   private labelCanvas = document.createElement("canvas");
   private labelTexture?: THREE.CanvasTexture;
+  /** 封面贴图槽（M5d 唯一允许的 scene.ts 改动主题，M5-PLAN-v2 §5.4）：
+   * 阵列实例保持素面（InstancedMesh 逐实例纹理代价大，设计稿也只画选中卡有封面）；
+   * 只有选中卡新增一张封面平面 mesh（scene 直挂跟随选中卡），纹理由 `setCoverTexture()` 换绑。
+   * 材质故意用 MeshBasicMaterial + 不走 themeMaterial 调色分支——暗色下封面**不去饱和**
+   * （设计稿 ce2fce… 明确否掉去饱和，仅边框/螺丝跟主题）。 */
+  private coverMesh?: THREE.Mesh;
+  private coverHolding: { texture: THREE.Texture; release: () => void } | null = null;
+  /** 封面换绑竞态令牌（水合/快速切卡时旧请求不得覆盖新结果）。 */
+  private coverTicket = 0;
+  /** 专辑墙模式（水合后）：封面平面才参与渲染。 */
+  private coverEnabled = false;
   private labelMark = new Image();
   private reduced = false;
   private quality = normalizeQuality(undefined);
@@ -473,6 +532,22 @@ export class ArchiveScene {
     this.appearance.apply(this.model, 0);
     this.drawLabel(0);
     this.scene.add(this.model);
+    // 封面平面（M5d）：不挂进 model.children（避开 CardAppearance 的 Printed_Canvas
+    // 主题/透明度管线——暗色下封面必须保持饱和，设计稿 ce2fce… 硬要求），而是作为
+    // scene 直接子节点每帧同步选中卡的 position/rotation（见 update 封面同步行）。
+    // 阵列实例保持素面；只有这张随选中卡移动。
+    this.coverMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(3.3, 3.3),
+      new THREE.MeshBasicMaterial({
+        map: null,
+        toneMapped: false,
+        transparent: true,
+        depthWrite: false,
+      }),
+    );
+    this.coverMesh.position.set(0, 1.85, 0.24);
+    this.coverMesh.visible = false;
+    this.scene.add(this.coverMesh);
     this.model.position.copy(this.cellPosition(poolCell(this.selectedSlot)));
     this.loaded = true;
   }
@@ -624,14 +699,18 @@ export class ArchiveScene {
   private rebaseCoordinates() {
     // Periodically reduce the logical coordinates while preserving every
     // relative position, spring velocity, ripple and idle phase.
+    // 列数（M5d 水合后 = 流派数，动态）：shift 必须是列数的整倍数，wrap(lane, N)
+    // 的列归属才不变；中心列取 N/2（上游 5 列时为 2，行为不变）。
+    const columns = Math.max(1, archiveColumns.length);
+    const center = Math.floor(columns / 2);
     const shift = {
       lane:
         Math.abs(this.selectedCell.lane) > 2048
-          ? Math.round((this.selectedCell.lane - 2) / 5) * 5
+          ? Math.round((this.selectedCell.lane - center) / columns) * columns
           : 0,
       row:
         Math.abs(this.selectedCell.row) > 2048
-          ? Math.floor((this.selectedCell.row - 12) / 8) * 8
+          ? Math.floor((this.selectedCell.row - ROW_OFFSET) / 8) * 8
           : 0,
     };
     if (!shift.lane && !shift.row) return;
@@ -1426,6 +1505,13 @@ export class ArchiveScene {
       cinematic ? 0 : this.rotation,
       0,
     );
+    // 封面平面跟随选中卡的 position/rotation（scene 直挂，见 load() 处注释）。
+    if (this.coverMesh && this.coverHolding) {
+      this.coverMesh.position.copy(this.model.position);
+      this.coverMesh.rotation.copy(this.model.rotation);
+      this.coverMesh.translateZ(0.24);
+      this.coverMesh.visible = this.coverVisible();
+    } else if (this.coverMesh) this.coverMesh.visible = false;
     // Measured from frame 787: X edge (382,-204), adjacent row (78,38).
     // The label vertical edge constrains height; the file base is occluded.
     // Do not calibrate field of view from the visible fragment of a file.
@@ -1707,6 +1793,9 @@ export class ArchiveScene {
       loaded: this.loaded,
       drawCalls: this.renderer.info.render.calls,
       superPerformance: this.superPerformance,
+      coverMapped: this.coverTexture !== null,
+      coverKey: this.coverKeyInternal,
+      rendererTextures: this.renderer.info.memory.textures,
       presentation: this.presence,
       triangles: this.renderer.info.render.triangles,
       archiveCount: this.drawnCells.length,
@@ -1724,7 +1813,7 @@ export class ArchiveScene {
       pulses: this.pulses.map((pulse) => ({ ...pulse })),
       referenceTime: Math.round((this.scanTime + 5) * 100) / 100,
       selectedSlot: this.selectedSlot,
-      selectedLane: Math.floor(this.selectedSlot / 32),
+      selectedLane: Math.floor(this.selectedSlot / getSlotStride()),
       selectedCell: { ...this.selectedCell },
       hoverCell: this.hoverCell ? { ...this.hoverCell } : null,
       hoverLifts: Object.fromEntries(this.hoverLifts),
