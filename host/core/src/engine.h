@@ -78,6 +78,14 @@ private:
     void OpenCurrentTrackAndStart(std::int64_t startMs, CommandOutcome& outcome);
     // 停止全部音频（不动状态机账本）。
     void StopAudio();
+    // M4-b：按当前策略完整重建播放链（SetOutputMode/Tick 升档/恢复探测共用）。
+    // frozenMs = 期望续播位置；wasPlaying = 重建后续播还是保持暂停冻结。
+    bool RebuildChain(std::int64_t frozenMs, bool wasPlaying, std::string& error);
+    // M4-b：underrun 滑窗升档（playing 时每 tick 喂增量）；触发则重建链。
+    // 返回需并入本 tick 的事件（重建成功=[state,position] 刷新徽章；失败=[state] idle）。
+    std::vector<std::pair<std::string, proto::Json>> MaybeExpandBuffer();
+    // M4-b：降级后的独占恢复探测（非 playing 时；曲终/暂停是主时机，绝不打断当前曲）。
+    std::vector<std::pair<std::string, proto::Json>> MaybeRecoverExclusive();
 
     static std::int64_t FramesToMs(std::uint64_t frames, std::uint32_t rate);
     static std::uint64_t MsToFrames(std::int64_t ms, std::uint32_t rate);
@@ -90,6 +98,7 @@ private:
     std::string volumeMode_ = "float";
     std::uint64_t streamTokens_ = 0;
     std::int64_t lastPositionMs_ = 0;  // 非 playing 状态的冻结位置（idle/stopped 用）
+    std::uint64_t lastUnderrunSeen_ = 0;  // M4-b：underrun 增量喂账的游标
 };
 
 }  // namespace rhine

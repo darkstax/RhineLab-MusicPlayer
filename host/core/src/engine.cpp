@@ -2,6 +2,7 @@
 #include "engine.h"
 
 #include <algorithm>
+#include <chrono>
 
 namespace rhine {
 namespace {
@@ -249,39 +250,107 @@ CommandOutcome Engine::SetOutputMode(const std::string& mode, std::optional<doub
     if (!trackId_.empty() && state_ != State::Idle) {
         const bool wasPlaying = state_ == State::Playing;
         const std::int64_t frozenMs = PositionMs();
-        const std::string path = trackId_.substr(5);
-        const std::string keepTrack = trackId_;
-        audio_.CloseTrack();
         std::string error;
-        if (!audio_.OpenTrack(path, error)) {
-            state_ = State::Idle;
-            trackId_.clear();
-            durationMs_ = 0;
-            lastPositionMs_ = 0;
-            throw DecodeFailure{error, proto::Json{{"track_id", keepTrack}}};
+        if (!RebuildChain(frozenMs, wasPlaying, error)) {
+            throw DecodeFailure{error, proto::Json{{"track_id", trackId_}}};
         }
-        durationMs_ = FramesToMs(audio_.length_frames(), audio_.rate());
-        if (wasPlaying) {
-            std::int64_t elapsedMs = 0;
-            if (!audio_.RestartStream(MsToFrames(frozenMs, audio_.rate()), &elapsedMs, error)) {
-                state_ = State::Idle;
-                trackId_.clear();
-                durationMs_ = 0;
-                lastPositionMs_ = 0;
-                throw DecodeFailure{error, proto::Json{{"track_id", keepTrack}}};
-            }
-            state_ = State::Playing;
-        } else {
-            audio_.SeekFrozen(MsToFrames(frozenMs, audio_.rate()));
-            state_ = State::Paused;
-        }
-        lastPositionMs_ = frozenMs;
     }
     // §5 result = {negotiated}（协议 v1.6 表字面嵌套形状，与桩一致）；补发 state 帧
     // （share 变了徽章要刷）。
     outcome.result = proto::Json{{"negotiated", audio_.Negotiated()}};
     AppendStatePosition(outcome);
     return outcome;
+}
+
+bool Engine::RebuildChain(std::int64_t frozenMs, bool wasPlaying, std::string& error) {
+    // CloseTrack（停设备 + join 解码线程）→ OpenTrack（ReopenForTrack 按策略开设备 +
+    // decoder 以新 appRate 重建）→ 从冻结位置续播/续停。失败 = 设备彻底不可用，
+    // 状态机清账（对齐 Play 失败路径）。
+    const std::string keepTrack = trackId_;
+    const std::string path = keepTrack.compare(0, 5, "file:") == 0 ? keepTrack.substr(5) : "";
+    audio_.CloseTrack();
+    if (path.empty() || !audio_.OpenTrack(path, error)) {
+        state_ = State::Idle;
+        trackId_.clear();
+        durationMs_ = 0;
+        lastPositionMs_ = 0;
+        return false;
+    }
+    durationMs_ = FramesToMs(audio_.length_frames(), audio_.rate());
+    if (wasPlaying) {
+        std::int64_t elapsedMs = 0;
+        if (!audio_.RestartStream(MsToFrames(frozenMs, audio_.rate()), &elapsedMs, error)) {
+            state_ = State::Idle;
+            trackId_.clear();
+            durationMs_ = 0;
+            lastPositionMs_ = 0;
+            return false;
+        }
+        state_ = State::Playing;
+    } else {
+        audio_.SeekFrozen(MsToFrames(frozenMs, audio_.rate()));
+        state_ = State::Paused;
+    }
+    lastPositionMs_ = frozenMs;
+    return true;
+}
+
+std::vector<std::pair<std::string, proto::Json>> Engine::MaybeExpandBuffer() {
+    // M4-b（Q1-c）：underrun 增量喂 OutputPolicy 滑窗；触发升档 → 完整重建链续播。
+    std::vector<std::pair<std::string, proto::Json>> extra;
+    if (trackId_.empty() || state_ != State::Playing) {
+        lastUnderrunSeen_ = audio_.underruns();
+        return extra;
+    }
+    const std::uint64_t now = audio_.underruns();
+    int hits = 0;
+    if (now > lastUnderrunSeen_) {
+        hits = static_cast<int>(std::min<std::uint64_t>(now - lastUnderrunSeen_, 16));
+        lastUnderrunSeen_ = now;
+    }
+    if (hits == 0) return extra;
+    const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    int target = 0;
+    for (int i = 0; i < hits; ++i) {
+        const int r = audio_.policy().OnUnderrun(nowMs);
+        if (r > target) target = r;
+    }
+    if (target == 0) return extra;  // 滑窗未触发升档
+    const std::int64_t frozenMs = PositionMs();
+    std::string error;
+    if (RebuildChain(frozenMs, true, error)) {
+        // 升档成功：徽章/缓冲事实刷新（negotiated 变了）。
+        extra.emplace_back("state", StatePayload());
+        extra.emplace_back("position", PositionPayload());
+    } else {
+        // 重建失败（设备没了）：RebuildChain 已清账到 idle，发 state 让 UI 收敛。
+        extra.emplace_back("state", StatePayload());
+    }
+    return extra;
+}
+
+std::vector<std::pair<std::string, proto::Json>> Engine::MaybeRecoverExclusive() {
+    // M4-b（§7.2）：降级态的独占恢复——只在非 playing（暂停/曲终/停止）时机，
+    // 走 RebuildChain 的"试开即探测"（内部 ReopenForTrack 先试独占）；
+    // 绝不在播放中打断当前曲（keep 语义：我占着不让，但不抢别人正在播的）。
+    std::vector<std::pair<std::string, proto::Json>> extra;
+    if (trackId_.empty() || state_ == State::Playing || !audio_.track_open()) return extra;
+    const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (!audio_.policy().ProbeDue(nowMs)) return extra;
+    const bool wasExclusive = audio_.exclusive();
+    const std::int64_t frozenMs = PositionMs();
+    std::string error;
+    const bool ok = RebuildChain(frozenMs, false, error);
+    const bool nowExclusive = ok && audio_.exclusive();
+    audio_.policy().OnProbeResult(nowExclusive, nowMs);
+    if (nowExclusive && !wasExclusive) {
+        // 升回成功：state 刷新（share/badges 变了）。
+        extra.emplace_back("state", StatePayload());
+        extra.emplace_back("position", PositionPayload());
+    }
+    return extra;
 }
 
 CommandOutcome Engine::Seek(std::int64_t positionMs) {
@@ -351,6 +420,9 @@ CommandOutcome Engine::SetVolume(const std::string& mode, std::optional<double> 
 }
 
 std::vector<std::pair<std::string, proto::Json>> Engine::Tick() {
+    // M4-b：升档/恢复探测钩子（各自只在对应状态生效）。
+    auto expandEvents = MaybeExpandBuffer();
+    auto recoverEvents = MaybeRecoverExclusive();
     // 桩：任意状态发一帧 position；playing 且播完 → 收敛 stopped（[position, state] 序）。
     bool finished = false;
     if (state_ == State::Playing) {
@@ -371,6 +443,8 @@ std::vector<std::pair<std::string, proto::Json>> Engine::Tick() {
     std::vector<std::pair<std::string, proto::Json>> events;
     events.emplace_back("position", PositionPayload());
     if (finished) events.emplace_back("state", StatePayload());
+    for (auto& e : expandEvents) events.push_back(std::move(e));
+    for (auto& e : recoverEvents) events.push_back(std::move(e));
     return events;
 }
 

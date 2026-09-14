@@ -128,6 +128,11 @@ public:
     std::int64_t BufferMsNow();
 
     std::uint64_t underruns() const { return underrunCount_.load(std::memory_order_relaxed); }
+    // dev-only（--dev-inject）：注入 underrun 计数，验证 M4-b 升档接线
+    // （underrun→OnUnderrun→RebuildChain）；生产路径不调，默认无 stdin 监听。
+    void InjectUnderruns(std::uint64_t n) {
+        underrunCount_.fetch_add(n, std::memory_order_relaxed);
+    }
     // 重开流次数（协议 v1.5 diag.get.reopens：RestartStream 成功计数；Freeze/Resume 短重建
     // 不计——那是暂停/继续语义，不是采样率切换重开）。
     std::uint64_t reopens() const { return reopenCount_.load(std::memory_order_relaxed); }

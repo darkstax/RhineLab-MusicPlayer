@@ -303,33 +303,43 @@ bool AudioBackend::ReopenForTrack(ma_uint32 srcRate, std::string& why) {
     // 完整关闭（stop+uninit）：OpenDeviceKind 会对同一 device_ 二次 init，
     // 只 stop 不 uninit 是句柄泄漏（自查修正）。调用方已保证安全点（解码静默）。
     CloseDeviceOnly();
-    // 协商：auto/exclusive 先试独占（s32@源率），失败降级共享。
-    // 试开即探测（M4-a 实测修正）：miniaudio 的 WASAPI 枚举表 nativeDataFormats 在本机
-    // 三端点全为 0 条（ma_context_get_device_info 需 IAudioClient 才填，vendor 枚举路径
-    // 未走），ExclusiveCapable 预探测永假；而实际 ma_device_init(EXCLUSIVE) 多格式全成功
-    // （tools/excl-probe 实测：s32@44.1/48/96k、s16@44.1k 均 init=0）。调用方已保证
-    // 安全点（设备停+解码静默），试开无副作用风险——失败即降级，正是 §7.2 降级链。
-    bool openedExclusive = false;
-    const bool tryExclusive = requested != OutputMode::Shared;
-    if (tryExclusive) {
-        std::string err;
-        if (OpenDeviceKind(/*exclusive=*/true, srcRate, policy_.bufferMs(), err)) {
-            openedExclusive = true;
-            why = "exclusive";
-        } else {
-            CloseDeviceOnly();  // 半开状态清理（init 失败本身不占句柄，防御性）
-            policy_.NoteDegrade(err);
-        }
+
+    // §7.2 正规路径：走 OutputPolicy::Negotiate（fallback_order × BufferTooSmall 抬升重试）。
+    // 失败分类现实（miniaudio init 只给泛化错误；WASAPI 设备 minPeriod 无公开查询）：
+    // 独占失败按"缓冲过小"保守归类 → 抬一档重试一次（实测：period<设备下限 3ms 时
+    // 独占 init 失败、≥5ms 成功——expand-smoke 抓到 buffer_ms=5 直落 shared 的缺口）；
+    // 再失败才降级 shared。共享失败 = 真不可用（Unknown），整体 return false。
+    OpenAttempt base;
+    base.rate = srcRate;
+    base.bitsContainer = 32;
+    base.bitsValid = 24;
+    base.integerEncoding = true;
+    base.periodMs = 0;  // 由策略 buffer 推导
+    const auto result = policy_.Negotiate(
+        [this, srcRate](const OpenAttempt& a) -> OpenResult {
+            OpenResult r;
+            std::string err;
+            if (OpenDeviceKind(a.share == OutputMode::Exclusive,
+                               a.share == OutputMode::Exclusive ? srcRate : mixRate_,
+                               a.bufferMs, err)) {
+                r.ok = true;
+                return r;
+            }
+            if (a.share == OutputMode::Exclusive) {
+                r.fail = FailKind::BufferTooSmall;
+                r.minPeriodMs = a.bufferMs * 2;  // 抬一档重试（Negotiate 对齐阶梯）
+            } else {
+                r.fail = FailKind::Unknown;
+            }
+            return r;
+        },
+        base);
+    if (!result.opened) {
+        why = "all open attempts failed";
+        return false;
     }
-    if (!openedExclusive) {
-        std::string err;
-        if (!OpenDeviceKind(/*exclusive=*/false, mixRate_, policy_.bufferMs(), err)) {
-            CloseDeviceOnly();
-            why = err;
-            return false;
-        }
-        why = tryExclusive ? "degraded to shared" : "shared";
-    }
+    why = result.achieved == OutputMode::Exclusive ? "exclusive"
+          : (requested != OutputMode::Shared ? "degraded to shared" : "shared");
     return true;
 }
 
@@ -790,10 +800,13 @@ proto::Json AudioBackend::Negotiated() const {
                        ? "bit-perfect"
                        : (factors.empty() ? "app-perfect" : "processed");
     }
+    // buffer_ms = 策略管理缓冲（§15 语义：用户请求 + 升档后的真实档；
+    // 不用设备 internalPeriod×periods——独占大 period 请求下该读数被 miniaudio
+    // 异常放大（实测 300ms→2612ms），且它表达的是设备节奏不是我们的缓冲策略）。
     return proto::Json{{"share", excl ? "exclusive" : "shared-event"},
                        {"backend", "wasapi"},
                        {"format", std::move(format)},
-                       {"buffer_ms", periodMs * (deviceFacts_.periods != 0 ? deviceFacts_.periods : 2)},
+                       {"buffer_ms", policy_.bufferMs()},
                        {"period_ms", periodMs},
                        {"auto_expanded", policy_.current().autoExpanded},
                        {"chain", std::move(chain)},

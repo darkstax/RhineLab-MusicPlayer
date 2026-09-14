@@ -85,3 +85,18 @@
   smoke.ps1 PASS；m1-scenario 桩裁判 ALL PASS；m-verify quick -NoCache 六步全绿。
 - 桩假数据：假设备矩阵 exclusive 按 §23 实测档（DAC 8 档 16/32、Realtek 6 档、Steam 仅 16）；
   FakeEngine.FakeNegotiated 注入点（不调 output.mode 时保持 M1 豁免 null，裁判断言不破）。
+
+### M4-b ✅（升档/恢复探测，09-14）
+- Engine 挂点：Tick 每拍喂 MaybeExpandBuffer（underrun 增量→OnUnderrun 滑窗→触发则
+  RebuildChain 续播，事件并回本 tick）+ MaybeRecoverExclusive（只在非 playing 时机走
+  ProbeDue 节奏，RebuildChain 试开即探测；绝不打断当前曲——keep 语义的"不抢别人"半边）。
+- ReopenForTrack 改走 OutputPolicy::Negotiate 正规路径（fallback_order × BufferTooSmall
+  抬升重试一次再降级）——expand-smoke 抓到 buffer_ms=5 直落 shared 的缺口后收编。
+- buffer_ms 语义修正：negotiated.buffer_ms = 策略管理缓冲（policy.bufferMs()），
+  不再用设备 internalPeriod×periods（独占大请求下 miniaudio 读数异常放大 300→2612ms，
+  位置推进不受影响 = 显示语义问题；设备节奏归 period_ms）。
+- dev-inject 钩子（--dev-inject stdin："underrun N"/"exit"）：升档路径的确定性机器验证，
+  生产默认关闭零行为变化。
+- 验证：expand-smoke 双模 PASS——SHARED（标志生效+位置连续+策略缓冲 5→10）、
+  EXCL（play 后 share=exclusive fidelity=bit-perfect、升档 5→10→…→300 封顶、
+  高频升档长曲仍 playing、bye exit 0）；excl-smoke 回归 PASS；m-verify quick 六步全绿。

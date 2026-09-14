@@ -14,6 +14,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <iostream>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -637,6 +638,14 @@ int main(int argc, char** argv) {
     HANDLE stopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     g_stopEvent.store(stopEvent, std::memory_order_release);
 
+    // dev-only（--dev-inject）：stdin 监听，"underrun N" 注入 underrun 计数、"exit" 有序退出。
+    // 验证 M4-b 升档接线的机器可测性；不带此标志时零行为改变（生产/冒烟默认不开）。
+    const bool devInject = [argc, argv] {
+        for (int i = 1; i < argc; ++i)
+            if (std::strcmp(argv[i], "--dev-inject") == 0) return true;
+        return false;
+    }();
+
     const int killAfter = std::atoi(ArgValue(argc, argv, "--kill-after").c_str());
     if (killAfter > 0) {
         std::thread([killAfter] {
@@ -681,6 +690,23 @@ int main(int argc, char** argv) {
                             std::to_string(audio.device_facts().periodFrames) + "x" +
                             std::to_string(audio.device_facts().periods));
         }
+    }
+
+    if (devInject) {
+        std::thread([&audio] {
+            std::string line;
+            while (std::getline(std::cin, line)) {
+                if (line == "exit" || line == "bye") {
+                    g_shutdown.store(true, std::memory_order_release);
+                    break;
+                }
+                if (line.rfind("underrun ", 0) == 0) {
+                    const auto n = std::strtoull(line.c_str() + 9, nullptr, 10);
+                    audio.InjectUnderruns(n);
+                    Log("info", "dev-inject underrun +" + std::to_string(n));
+                }
+            }
+        }).detach();
     }
 
     int exitCode = 0;
