@@ -114,3 +114,15 @@
   窗口致偶发 device-busy，脚本会话间 +2s 隔离——真实产品里壳只拉一个核心，无此路径）；
   excl-smoke 回归 + policy harness 35/35 + m-verify quick 六步全绿。
 - 交互④（拔 DAC）/⑤（蓝牙耳机）仍待用户物理验证（脚本无法代劳）。
+
+### M4-d ✅（设置收口，09-14）
+- 壳侧 config.set output.* → 翻译下发核心 cmd（键映射：output.device→devices.select{id}；
+  mode/buffer_ms/auto_expand/buffer_max 聚合一次 output.mode）；fire-and-forget（config.set
+  ack 仍=已持久化，实况经 evt{state}.negotiated 回流）。启动同步 SyncOutputConfigToCore
+  （core Ready 后偏离默认才补发，幂等；含 bridge 创建晚于 Ready 的竞态补同步）。
+- 设置层解锁（M4 已实现，"暂未开放"文案翻为"已开放"）：output.mode 三选项
+  （shared/auto/exclusive）；EXCLUSIVE_NOTE 更新；exclusive+hardware 音量互斥提示
+  （独占无端点会话音量→回落 fixed）；devices.list exclusive 三态解析（null=未知/对象=能力）
+  + 设备下拉"可独占/无独占"标注；发烧预设保持"不自动请求独占"（§15 不默认开，手动下拉开放）。
+- 测试：settings 25/25（含 exclusive 解锁断言 + v1.6 三态解析对象/null/非法归 null）；
+  tsc/check-shell/build 三绿。端到端 config.set→exclusive 达成链（需起壳+CDP）归交互验证。

@@ -65,7 +65,12 @@ public partial class MainWindow : Window
         {
             if (_options.SpawnedCoreOwned) StartOwnedCore();
             _channel = new ShellChannel(_options.PipeName);
-            _channel.StateChanged += state => Dispatcher.InvokeAsync(() => RefreshStatus());
+            _channel.StateChanged += state => Dispatcher.InvokeAsync(() =>
+            {
+                RefreshStatus();
+                // M4-d：核心就绪 → 持久化 output.* 补发一次（偏离默认才发，幂等）。
+                if (state == ChannelState.Ready) _bridge?.SyncOutputConfigToCore();
+            });
             _channel.Start();
         }
 
@@ -103,6 +108,8 @@ public partial class MainWindow : Window
                 _bridge = new Bridge(_channel, frame =>
                     _view.CoreWebView2.PostWebMessageAsJson(frame.ToJsonString(RhineShared.IpcFrame.Json)));
                 Bridge.Attach(_view, _bridge);
+                // M4-d：bridge 创建可能晚于 core Ready（启动竞态）——已就绪则立刻补一次同步。
+                if (_channel!.State == ChannelState.Ready) _bridge.SyncOutputConfigToCore();
                 RegisterSmtc();
                 // M5c：任务栏歌词 writer（config taskbar.source==player 才接管；纯订阅式接线）。
                 _taskbar = RhineShell.Taskbar.TaskbarWiring.Install(_bridge);

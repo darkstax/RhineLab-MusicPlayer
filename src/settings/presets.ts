@@ -36,7 +36,7 @@ export type PresetDef = {
   readonly note?: string;
 };
 
-export const EXCLUSIVE_NOTE = "独占模式暂未开放（M4）";
+export const EXCLUSIVE_NOTE = "独占模式已开放（M4：bit-perfect 需整型源+fixed 音量+不重采样）";
 
 export const PRESETS: readonly PresetDef[] = [
   {
@@ -163,8 +163,12 @@ export function constraintState(config: Readonly<Record<string, unknown>>): Cons
         : null,
     "quality.target_rate": resample !== "force" ? "仅在强制重采样（force）时可调" : null,
     "quality.resample_quality": resample !== "force" ? "仅在强制重采样（force）时可调" : null,
-    // 独占属 M4 域：恒灰显（不实现不欺骗）。
-    "output.mode.exclusive": EXCLUSIVE_NOTE,
+    // M4 已实现：exclusive 不再恒灰；但独占下 hardware 音量不可用（无端点会话音量），
+    // 独占 ∧ float 音量 = 非位完美——诚实提示（不阻断，徽章如实降级）。
+    "output.mode.exclusive":
+      text(config["output.mode"], "shared") === "exclusive" && volumeMode === "hardware"
+        ? "独占模式下 hardware 音量不可用，音量将回落 fixed（位完美前提）"
+        : null,
   };
 }
 

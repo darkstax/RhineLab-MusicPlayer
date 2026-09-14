@@ -27,6 +27,10 @@ public sealed class Bridge
     private readonly Dispatcher _dispatcher = Dispatcher.CurrentDispatcher;
     private readonly Action<JsonObject> _post;
     private readonly LibraryApi _library;
+    // M4-d：config.set output.* 的键 → 核心 cmd 翻译表（§15 键名不变，cmd 面 v1.6）。
+    // output.device → devices.select{id}；其余四键聚合成一次 output.mode。
+    private static readonly string[] OutputModeKeys =
+        ["output.mode", "output.buffer_ms", "output.auto_expand_buffer", "output.buffer_max_ms"];
 
     public Bridge(ShellChannel channel, Action<JsonObject> post)
     {
@@ -160,6 +164,65 @@ public sealed class Bridge
             };
     }
 
+    /// <summary>M4-d：壳侧主动下发核心命令（无前端 id 上下文 → 用 shell-N 序列号；
+    /// 应答帧照常路由（pending 里没有对应 id → 前端忽略），实况以 evt{state} 为准。</summary>
+    private void ForwardCoreCmd(string cmd, JsonObject data)
+    {
+        try
+        {
+            var id = $"shell-{_forwardSeq++}";
+            var frame = new JsonObject
+            {
+                ["v"] = 1,
+                ["t"] = "cmd",
+                ["id"] = id,
+                ["cmd"] = cmd,
+                ["data"] = data,
+            };
+            _ = _channel.SendCommandAsync(id, frame, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"forward {cmd} failed: {ex.Message}");
+        }
+    }
+
+    private int _forwardSeq;
+
+    /// <summary>M4-d：核心就绪后的 config→cmd 启动同步——持久化的 output.* 若偏离
+    /// 核心默认（shared/10/auto/300）则补发一次 output.mode；钉选设备同理。
+    /// 幂等：值与默认一致时零命令。</summary>
+    public void SyncOutputConfigToCore()
+    {
+        try
+        {
+            var mode = (ConfigStore.Get("output.mode")?.GetValueKind() == JsonValueKind.String
+                ? ConfigStore.Get("output.mode")!.GetValue<string>() : "shared");
+            var device = ConfigStore.Get("output.device")?.GetValueKind() == JsonValueKind.String
+                ? ConfigStore.Get("output.device")!.GetValue<string>() : "default";
+            if (device.Length > 0 && device != "default")
+            {
+                ForwardCoreCmd("devices.select", new JsonObject { ["id"] = device });
+            }
+            var bufferMs = ConfigStore.Get("output.buffer_ms");
+            var autoExpand = ConfigStore.Get("output.auto_expand_buffer");
+            var bufferMax = ConfigStore.Get("output.buffer_max_ms");
+            bool nonDefault = mode != "shared" || bufferMs is not null || autoExpand is not null
+                || bufferMax is not null;
+            if (!nonDefault) return;
+            var payload = new JsonObject { ["mode"] = mode };
+            if (bufferMs is not null) payload["buffer_ms"] = bufferMs.DeepClone();
+            if (autoExpand is not null) payload["auto_expand_buffer"] = autoExpand.DeepClone();
+            if (bufferMax is not null) payload["buffer_max_ms"] = bufferMax.DeepClone();
+            ForwardCoreCmd("output.mode", payload);
+            Log.Info($"output config synced to core: {payload.ToJsonString()}");
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"output sync failed: {ex.Message}");
+        }
+    }
+
     private static JsonObject ShellHello() => new()
     {
         ["v"] = 1,
@@ -252,6 +315,28 @@ public sealed class Bridge
                     var enabled = value?.GetValueKind() == JsonValueKind.True;
                     // P/Invoke 调度到 UI 线程：执行状态标志随线程消亡，后台线程池退出会静默失效。
                     _ = _dispatcher.InvokeAsync(() => KeepAwake.Apply(enabled));
+                }
+                // M4-d（协议 v1.6）：output.* 键变更 → 翻译下发核心（fire-and-forget：
+                // config.set 的 ack 语义仍是"已持久化"；核心实况经 evt{state} 的
+                // negotiated 回流，UI 不依赖此 ack）。设备未就绪/核心缺席时静默（下次
+                // play 时核心按 config 兜底重协商由 M6 收口项处理，见 FINDINGS）。
+                if (path == "output.device")
+                {
+                    ForwardCoreCmd("devices.select", new JsonObject
+                    {
+                        ["id"] = value?.GetValueKind() == JsonValueKind.String
+                            ? JsonValue.Create(value!.GetValue<string>()) : JsonValue.Create(""),
+                    });
+                }
+                else if (Array.IndexOf(OutputModeKeys, path) >= 0)
+                {
+                    var mode = ConfigStore.Get("output.mode")?.GetValueKind() == JsonValueKind.String
+                        ? ConfigStore.Get("output.mode")!.GetValue<string>() : "shared";
+                    var payload = new JsonObject { ["mode"] = mode };
+                    if (ConfigStore.Get("output.buffer_ms") is { } bm) payload["buffer_ms"] = bm.DeepClone();
+                    if (ConfigStore.Get("output.auto_expand_buffer") is { } ae) payload["auto_expand_buffer"] = ae.DeepClone();
+                    if (ConfigStore.Get("output.buffer_max_ms") is { } bx) payload["buffer_max_ms"] = bx.DeepClone();
+                    ForwardCoreCmd("output.mode", payload);
                 }
             }
             else

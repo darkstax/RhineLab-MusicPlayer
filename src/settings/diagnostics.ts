@@ -94,12 +94,31 @@ export type DeviceEntry = {
   readonly isDefault: boolean;
   readonly rates: readonly number[];
   readonly minPeriodMs: number | null;
-  readonly exclusive: null;
+  /** v1.6 三态：null=未知（试开判定）；对象=探测表/实况。 */
+  readonly exclusive: { supported: boolean; rates: readonly { rate: number; bits: readonly number[] }[] } | null;
 };
 
 export type DevicesModel = { ready: boolean; devices: readonly DeviceEntry[]; reason: string | null };
 
-/** 协议 v1.5 §5 devices.list result → 下拉数据（exclusive 恒 null=M4 域）。 */
+/** v1.6 exclusive 三态解析：null=未知；非法形状也归 null（不猜）。 */
+function parseExclusive(raw: unknown): DeviceEntry["exclusive"] {
+  if (typeof raw !== "object" || raw === null) return null;
+  const value = raw as Record<string, unknown>;
+  if (typeof value.supported !== "boolean" || !Array.isArray(value.rates)) return null;
+  const rates = value.rates.flatMap((entry): { rate: number; bits: readonly number[] }[] => {
+    if (typeof entry !== "object" || entry === null) return [];
+    const r = entry as Record<string, unknown>;
+    const rate = num(r.rate);
+    if (rate === null) return [];
+    const bits = Array.isArray(r.bits)
+      ? r.bits.filter((b): b is number => typeof b === "number")
+      : [];
+    return [{ rate, bits }];
+  });
+  return { supported: value.supported, rates };
+}
+
+/** 协议 v1.6 §5 devices.list result → 下拉数据（exclusive 三态：null=未知/对象=能力）。 */
 export function parseDevices(raw: unknown): DevicesModel {
   if (typeof raw !== "object" || raw === null || !Array.isArray((raw as Record<string, unknown>).devices)) {
     return { ready: false, devices: [], reason: null };
@@ -125,7 +144,7 @@ export function parseDevices(raw: unknown): DevicesModel {
         isDefault: value.default === true,
         rates,
         minPeriodMs: num(capabilities.min_period_ms),
-        exclusive: null,
+        exclusive: parseExclusive(capabilities.exclusive),
       }];
     },
   );

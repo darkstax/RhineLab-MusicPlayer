@@ -291,8 +291,8 @@ export const GROUPS: readonly GroupDef[] = [
     id: "output",
     label: "输出 / OUTPUT",
     fields: [
-      { path: "output.device", kind: "select", label: "输出设备", hint: "枚举与共享能力（协议 v1.5 只读面；独占能力属 M4）", options: [["default", "系统默认设备"]] },
-      { path: "output.mode", kind: "select", label: "输出模式", options: [["auto", "自动（推荐）"], ["shared", "共享"]], hint: `exclusive 属 M4 域：${EXCLUSIVE_NOTE}` },
+      { path: "output.device", kind: "select", label: "输出设备", hint: "枚举+共享/独占能力（协议 v1.6；钉选后拔出将自动回退）", options: [["default", "系统默认设备"]] },
+      { path: "output.mode", kind: "select", label: "输出模式", options: [["shared", "共享（混音）"], ["auto", "自动（优先独占）"], ["exclusive", "独占（bit-perfect）"]], hint: EXCLUSIVE_NOTE },
       { path: "output.buffer_ms", kind: "select", label: "缓冲时长", options: [["5", "5 ms（低延迟）"], ["10", "10 ms"], ["25", "25 ms（稳）"]] },
       { path: "output.auto_expand_buffer", kind: "toggle", label: "欠载自动升档", hint: "underrun 主对策（Q1-c）" },
       { path: "output.buffer_max_ms", kind: "number", label: "升档上限", min: 10, max: 2000, step: 10, unit: "ms" },
@@ -393,7 +393,12 @@ function fieldMarkup(field: FieldDef, state: PanelState): string {
       : field.path === "output.device"
         ? [
             ...(field.options ?? []),
-            ...state.devices.devices.map((device) => [device.id, `${device.name}${device.isDefault ? " · 默认" : ""}`] as const),
+            ...state.devices.devices.map((device) => {
+              const cap = device.exclusive
+                ? device.exclusive.supported ? " · 可独占" : " · 无独占"
+                : "";
+              return [device.id, `${device.name}${device.isDefault ? " · 默认" : ""}${cap}`] as const;
+            }),
           ]
         : field.options ?? [];
     const optionMarkup = options

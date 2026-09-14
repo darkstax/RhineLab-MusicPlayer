@@ -91,7 +91,7 @@ test("1. 预设清单：日常/沉浸/发烧三档 + 各自映射 §15 键", () 
   assert.deepEqual(immersive.local, { "ui.reduced_motion": false, "wall.covers": "textures" });
 });
 
-test("2. 发烧=共享+无缝+全旁路，不含独占；文案明写「独占模式暂未开放（M4）」", () => {
+test("2. 发烧=共享+无缝+全旁路，预设不自动请求独占（M4-d：exclusive 手动开放，§15 不默认开）", () => {
   const audiophile = applyPreset("audiophile");
   assert.ok(audiophile);
   assert.equal(audiophile.ipc.find(([path]) => path === "output.mode")[1], "shared");
@@ -104,8 +104,10 @@ test("2. 发烧=共享+无缝+全旁路，不含独占；文案明写「独占�
   // 不写任何 exclusive 键/值（M4 排除）
   assert.equal(audiophile.ipc.some(([path, value]) => path.includes("exclusive") || value === "exclusive"), false);
   assert.ok(audiophile.note ?? PRESETS[2].note);
-  assert.match(PRESETS[2].note, /独占模式暂未开放（M4）/);
-  assert.match(EXCLUSIVE_NOTE, /独占模式暂未开放/);
+  // M4-d：文案已翻为"已开放"；预设 note 明写本档不请求独占。
+  assert.match(PRESETS[2].note, /独占模式已开放/);
+  assert.match(PRESETS[2].note, /不请求独占/);
+  assert.match(EXCLUSIVE_NOTE, /独占模式已开放/);
 });
 
 test("3. matchPreset：默认配置=日常；全旁路组合=发烧；偏离=自定义", () => {
@@ -153,8 +155,12 @@ test("6. 互斥灰显联动：改动后重算 + withConfigChange 归自定义", 
   assert.equal(state.preset, "everyday"); // 与默认一致仍为日常
   const moved = withConfigChange({ ...CONFIG_DEFAULTS }, {}, { path: "quality.volume_mode", value: "float" });
   assert.equal(moved.preset, "custom");
-  // output.mode 的 exclusive 选项恒灰显（M4 域，不实现不欺骗）
-  assert.match(constraintState(CONFIG_DEFAULTS)["output.mode.exclusive"], /独占模式暂未开放/);
+  // M4-d：exclusive 解锁——默认（shared）无约束；exclusive+hardware 音量才提示回落。
+  assert.equal(constraintState(CONFIG_DEFAULTS)["output.mode.exclusive"], null);
+  assert.match(
+    constraintState({ ...CONFIG_DEFAULTS, "output.mode": "exclusive", "quality.volume_mode": "hardware" })["output.mode.exclusive"],
+    /hardware 音量不可用/,
+  );
 });
 
 // ——————————————————————————— chain 渲染三态（只渲染不判断）———————————————————————————
@@ -310,7 +316,7 @@ test("16. parseQuarantine：items 表形状；坏条目跳过；缺席=未就绪
   assert.equal(parseQuarantine(null).ready, false);
 });
 
-test("17. parseDevices：v1.5 只读面；exclusive 恒 null；min_period/mix 能力提取", () => {
+test("17. parseDevices：v1.6 三态 exclusive（null=未知/对象=能力）；min_period 提取", () => {
   const model = parseDevices({
     devices: [
       {
@@ -331,8 +337,22 @@ test("17. parseDevices：v1.5 只读面；exclusive 恒 null；min_period/mix �
   assert.equal(model.devices[0].rates.join(","), "44100,96000");
   assert.equal(model.devices[0].isDefault, true);
   assert.equal(model.devices[0].minPeriodMs, 3);
-  assert.equal(model.devices[0].exclusive, null);
-  assert.equal(parseDevices(null).ready, false); // 未实现/缺席 → 下拉显示"待 M6-F 接线"
+  assert.equal(model.devices[0].exclusive, null); // ③ 未知态（本机枚举表常态）
+  // v1.6 对象态：探测表/实况（supported+rates 形状），非法 bits 项过滤。
+  const capable = parseDevices({
+    devices: [{
+      id: "x", name: "DAC", kind: "playback", default: true,
+      capabilities: { rates: [], min_period_ms: null, mix_format: null,
+        exclusive: { supported: true, rates: [{ rate: 192000, bits: [16, 32] }, { rate: "bad", bits: [] }] } },
+    }],
+  });
+  assert.equal(capable.devices[0].exclusive.supported, true);
+  assert.equal(capable.devices[0].exclusive.rates.length, 1); // 非法 rate 项被滤
+  // 非法整体形状（缺 supported）→ 归 null 不猜。
+  const bogus = parseDevices({ devices: [{ id: "y", name: "n", kind: "playback", default: false,
+    capabilities: { rates: [], exclusive: { rates: [] } } }] });
+  assert.equal(bogus.devices[0].exclusive, null);
+  assert.equal(parseDevices(null).ready, false); // 未实现/缺席 → 下拉占位
 });
 
 test("18. diagnosticsMarkup：未就绪优雅文案（不编造数值）+ framesLost 同源呈现", () => {
