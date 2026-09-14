@@ -84,7 +84,7 @@ M0-M6 增量启用；未实现的 cmd 必须回 `err{code:"not_implemented"}`，
 | `spectrum.on` / `spectrum.off` | —（无参数） | `{enabled:boolean}` | M3（v1.3 启用） |
 | `devices.list` | — | `{devices:[{id,name,kind,default,capabilities:{rates:[{rate,bits...}],min_period_ms,mix_format,exclusive:{supported:bool,rates:[{rate,bits[]}]}}}}]`（**v1.5 只读面 + v1.6 补 exclusive 真探测**：纯枚举读取，无 open 副作用） | M6 |
 | `library.quarantine` | `{limit?=100}` | `{items:[{path,reason,mtime,size,seen_at}]}`（v1.5，壳侧自答只读） | M6 |
-| `devices.select` | `{id, mode:auto/shared/exclusive}` | `{negotiated:{...}}`（§8） | M3 |
+| `devices.select` | `{id:string}`（空串=回跟随系统默认；非空=钉选 MMDevice.ID，未知回 bad_request） | `{negotiated}` + [state,position] 补发（有曲时重建链续播） | M4-c（v1.6 启用） |
 | `output.mode` | `{mode:"shared"\|"exclusive"\|"auto", buffer_ms?, auto_expand_buffer?, buffer_max_ms?}` | `{negotiated}`（重开结果实况；降级如实） | M4-a（v1.6 启用） |
 | `config.get` / `config.set` | `{path:"output.buffer_ms", value}` | `{value}`（生效值，可能被钳制） | M1 |
 | `library.scan` | `{roots?:[path], full?:bool}`（缺省=config 根；full=忽略 mtime 增量） | `{scanned,added,updated,removed,failed,elapsed_ms}` | M5（v1.4 定形；**壳侧自答**，不经核心） |
@@ -125,6 +125,7 @@ M0-M6 增量启用；未实现的 cmd 必须回 `err{code:"not_implemented"}`，
 | `spectrum` | 30Hz（订阅开关 `spectrum.on/off`，§5；默认 off，无消费者不产出） | `{bands_l[64], bands_r[64], low, mid, high, activity, beat_phase}`（payload v1.3 定形，见下） |
 | `diag` | 计数变更/1Hz | `{underruns(+delta), buffer_ms_now, reopened, last_fallback}` |
 | `error` | 即时 | `{where, code, message, retryable, degraded_to?}` |
+| `error`（核心侧，M4-c） | 即时（设备失效等） | `{code:"device_gone", message, retryable:true}`——区别于 `err` 帧（那是 cmd 应答）；UI 提示 + 自动重开失败时的降级面 |
 | `library`（**壳侧产生**） | 扫描阶段（非周期；progress ≤1Hz） | `{phase:"start"\|"progress"\|"done", scanned, total, quarantine}` |
 | `log`（壳侧） | — | 不转发前端，仅进环形缓冲与日志文件 |
 

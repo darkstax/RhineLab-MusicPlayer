@@ -15,7 +15,15 @@ function New-Core([string]$pipe) {
   $si.WorkingDirectory = $WorkDir
   $si.RedirectStandardInput = $true; $si.RedirectStandardOutput = $true; $si.UseShellExecute = $false
   $si.CreateNoWindow = $true
-  return [System.Diagnostics.Process]::Start($si)
+  $p = [System.Diagnostics.Process]::Start($si)
+  # 核心 stdout 持续抽干落盘（排障用；不抽干会满塞阻塞）
+  Start-Job -ArgumentList $p -ScriptBlock {
+    param($proc) while (-not $proc.StandardOutput.EndOfStream) {
+      $line = $proc.StandardOutput.ReadLine()
+      Add-Content -Path "C:\Users\StarL\m2-work\runs\m4e\core-$tag.log" -Value $line
+    }
+  } | Out-Null
+  return $p
 }
 $fail = 0
 function Assert([bool]$ok, [string]$n) {
@@ -80,6 +88,9 @@ function Session([bool]$exclusive) {
   $proc.StandardInput.Close(); $proc.WaitForExit(8000) | Out-Null
   Assert ($proc.ExitCode -eq 0) "[$tag] bye 有序退出 exit=$($proc.ExitCode)"
   $w.Dispose(); $r.Dispose(); $c.Dispose()
+  # 独占设备释放有 drain（ma_device_stop 等缓冲排空）——跨进程会话间留窗口，
+  # 否则下一进程 exclusive/shared init 吃 device-busy（实测偶发 FAIL 根因）。
+  Start-Sleep -Seconds 2
 }
 Session $false   # 共享：验标志 + 钳制事实
 Session $true    # 独占：验实际抬升 + 封顶 + playing

@@ -67,6 +67,14 @@ public:
     bool device_open() const { return deviceOpen_.load(std::memory_order_acquire); }
     const DeviceFacts& device_facts() const { return deviceFacts_; }
     bool exclusive() const { return deviceFacts_.exclusive; }
+    // M4-c：设备事件（notification 线程置旗，会话线程消费——回调零分配红线）。
+    bool TakeDeviceEventPending() {
+        return deviceEventPending_.exchange(false, std::memory_order_acq_rel);
+    }
+    // 设备是否"名义 started"（拔出/失效率查：playing 但非 started = 设备没了）。
+    bool device_running() const;
+    // M4-c devices.select：钉选设备（id=MMDevice.ID；空串=回到跟随系统默认）。
+    bool SelectDevice(const std::string& endpointId, std::string& error);
 
     // ---- M4 输出策略（协议 v1.6 output.mode；协商状态机在 OutputPolicy，纯逻辑单测）----
     void ConfigureOutput(const OutputPolicyConfig& config) { policy_.UpdateConfig(config); }
@@ -160,8 +168,11 @@ private:
                                                ma_uint32 formatCap);  // M4-a devices.list
     proto::Json DeviceExclusiveJson(const ma_device_info& info,
                                     ma_uint32 formatCap);  // 三态：实况/探测表/null(未知)
-    bool OpenDeviceKind(bool exclusive, ma_uint32 rate, int bufferMs, std::string& error);
+    bool OpenDeviceKind(bool exclusive, ma_uint32 rate, int bufferMs, std::string& error,
+                        const ma_device_id* deviceId = nullptr);
     void CloseDeviceOnly();  // 只 uninit device（context 保留）
+    static void StaticNotification(const ma_device_notification* n);
+    void OnNotification(const ma_device_notification* n);
 
     std::int64_t RestartMs(std::uint64_t startFrames, std::string& error) {
         std::int64_t elapsedMs = 0;
@@ -223,7 +234,9 @@ private:
     // 默认端点 id（缓存自首次枚举，重开时钉同一设备）。ma_device_id 是 union
     // （WASAPI 用 wchar wasapi[64]），必须整结构体拷贝 + ma_device_id_equal 比较。
     ma_device_id lastDeviceId_{};
-    bool hasDeviceId_ = false;
+    bool hasDeviceId_ = false;   // false = 跟随系统默认（pDeviceID=nullptr）
+    std::atomic<bool> deviceEventPending_{false};  // rerouted/lost 旗（会话线程消费）
+    std::atomic<bool> deviceLostSeen_{false};      // 写路径报错记录（device_running 佐证）
     ma_uint32 mixRate_ = 48000; // 共享混音率（首次枚举缓存）
     ma_format mixFormat_ = ma_format_f32;
     std::vector<std::pair<ma_uint32, ma_uint32>> exclusiveFormats_;  // {rate, bitsContainer} 独占能力缓存

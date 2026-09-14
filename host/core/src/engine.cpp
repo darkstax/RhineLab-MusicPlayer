@@ -353,6 +353,59 @@ std::vector<std::pair<std::string, proto::Json>> Engine::MaybeRecoverExclusive()
     return extra;
 }
 
+CommandOutcome Engine::SelectDevice(const std::string& id) {
+    // §5 devices.select：id 空串 = 回"跟随系统默认"；非空 = 钉选（校验存在性）。
+    std::string error;
+    if (!audio_.SelectDevice(id, error)) {
+        throw BadRequest{"devices.select: " + error};
+    }
+    CommandOutcome outcome;
+    // 有曲目 → 完整重建链到新设备（RebuildChain 内 OpenTrack→ReopenForTrack 走新 pin）。
+    if (!trackId_.empty() && state_ != State::Idle) {
+        const bool wasPlaying = state_ == State::Playing;
+        const std::int64_t frozenMs = PositionMs();
+        if (!RebuildChain(frozenMs, wasPlaying, error)) {
+            throw DecodeFailure{error, proto::Json{{"track_id", trackId_}}};
+        }
+        lastPositionMs_ = frozenMs;
+    }
+    outcome.result = proto::Json{{"negotiated", audio_.Negotiated()}};
+    AppendStatePosition(outcome);
+    return outcome;
+}
+
+std::vector<std::pair<std::string, proto::Json>> Engine::MaybeHandleDeviceEvent() {
+    // M4-c：设备事件消费（通知线程置旗 + 会话线程轮询兜底——钉选设备拔出时
+    // Windows 不一定发默认设备变更通知，但 ma_device 会 stop：playing 却非 started 即失效）。
+    const bool flagged = audio_.TakeDeviceEventPending();
+    const bool lostWhilePlaying =
+        state_ == State::Playing && !trackId_.empty() && !audio_.device_running();
+    std::vector<std::pair<std::string, proto::Json>> extra;
+    if (!flagged && !lostWhilePlaying) return extra;
+    if (trackId_.empty() || state_ != State::Playing) return extra;  // 非播放：忽略（下次 play 自然对齐）
+    if (audio_.device_running()) {
+        // 共享模式 miniaudio 已自动重路由（rerouted 通知）：位置账本不变，刷新 state
+        // （negotiated 里设备名/格式可能已变）。
+        extra.emplace_back("state", StatePayload());
+        return extra;
+    }
+    // 设备失效/拔出且 playing：自动重开尝试（跟随默认则切到新默认；钉选设备没了则失败）；
+    // 重开不成 → 收敛 paused + evt.error{device_gone}（§7，交 UI 提示）。
+    const std::int64_t frozenMs = lastPositionMs_;
+    std::string error;
+    if (RebuildChain(frozenMs, true, error)) {
+        extra.emplace_back("state", StatePayload());
+        extra.emplace_back("position", PositionPayload());
+        return extra;
+    }
+    state_ = State::Paused;  // 设备没了，无法续播：冻结在末位置
+    extra.emplace_back("state", StatePayload());
+    extra.emplace_back("error", proto::Json{{"code", "device_gone"},
+                                            {"message", error.empty() ? "device unavailable" : error},
+                                            {"retryable", true}});
+    return extra;
+}
+
 CommandOutcome Engine::Seek(std::int64_t positionMs) {
     if (trackId_.empty() && !audio_.track_open()) {
         throw BadRequest{"engine.seek requires a loaded track"};
@@ -423,6 +476,7 @@ std::vector<std::pair<std::string, proto::Json>> Engine::Tick() {
     // M4-b：升档/恢复探测钩子（各自只在对应状态生效）。
     auto expandEvents = MaybeExpandBuffer();
     auto recoverEvents = MaybeRecoverExclusive();
+    auto deviceEvents = MaybeHandleDeviceEvent();
     // 桩：任意状态发一帧 position；playing 且播完 → 收敛 stopped（[position, state] 序）。
     bool finished = false;
     if (state_ == State::Playing) {
@@ -445,6 +499,7 @@ std::vector<std::pair<std::string, proto::Json>> Engine::Tick() {
     if (finished) events.emplace_back("state", StatePayload());
     for (auto& e : expandEvents) events.push_back(std::move(e));
     for (auto& e : recoverEvents) events.push_back(std::move(e));
+    for (auto& e : deviceEvents) events.push_back(std::move(e));
     return events;
 }
 

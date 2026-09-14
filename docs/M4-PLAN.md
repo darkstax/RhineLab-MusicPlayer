@@ -100,3 +100,17 @@
 - 验证：expand-smoke 双模 PASS——SHARED（标志生效+位置连续+策略缓冲 5→10）、
   EXCL（play 后 share=exclusive fidelity=bit-perfect、升档 5→10→…→300 封顶、
   高频升档长曲仍 playing、bye exit 0）；excl-smoke 回归 PASS；m-verify quick 六步全绿。
+
+### M4-c ✅（热插拔 + 设备切换，09-14）
+- devices.select 启用（协议 v1.6）：id 空=回跟随系统默认；非空=钉选（枚举校验，未知 bad_request）；
+  有曲时 RebuildChain 完整重建续播（位置不回退）。
+- 设备事件双路：miniaudio notificationCallback（rerouted/interruption，通知线程只置原子旗）
+  + 会话 tick 轮询兜底（钉选设备拔出无默认变更通知 → playing 却 !device_running 判失效）。
+- 失效处理：先自动重开（跟随默认则切新默认）；失败 → 收敛 paused + evt{error,device_gone,
+  retryable}（协议 v1.6 新 kind）；非 playing 忽略（下次 play 自然对齐）。
+- 共享模式 miniaudio 内置自动重路由（vendor 源码确认；独占不自动=已知限制，走我们的重开路径）。
+- 验证：select-smoke PASS（真机 USB DAC→Realtek 钉选切换、续播位置 2025→2090 连续、
+  未知 id 拒绝、失败后链无损）；expand-smoke 3/3 稳定 PASS（新发现：跨进程独占 drain
+  窗口致偶发 device-busy，脚本会话间 +2s 隔离——真实产品里壳只拉一个核心，无此路径）；
+  excl-smoke 回归 + policy harness 35/35 + m-verify quick 六步全绿。
+- 交互④（拔 DAC）/⑤（蓝牙耳机）仍待用户物理验证（脚本无法代劳）。

@@ -251,9 +251,11 @@ bool AudioBackend::ExclusiveCapable(ma_uint32 rate) const {
 // 设备打开内核（context 必须已存在）。exclusive：s32 容器 @ 源率（位完美路，无混音器）；
 // shared：混音格式 @ 混音率。bufferMs→periodSizeInMilliseconds（OutputPolicy 已钳好）。
 bool AudioBackend::OpenDeviceKind(bool exclusive, ma_uint32 rate, int bufferMs,
-                                  std::string& error) {
+                                  std::string& error, const ma_device_id* deviceId) {
     ma_device_config config = ma_device_config_init(ma_device_type_playback);
-    config.playback.pDeviceID = hasDeviceId_ ? &lastDeviceId_ : nullptr;
+    // M4-c：deviceId=nullptr → 跟随系统默认（miniaudio 内置自动重路由，共享模式）；
+    // 非空 → 钉选该端点（devices.select 显式指定，或 CacheDefaultEndpoint 缓存的默认）。
+    config.playback.pDeviceID = deviceId;
     config.playback.channels = 2;
     if (exclusive) {
         config.playback.format = ma_format_s32;
@@ -268,8 +270,10 @@ bool AudioBackend::OpenDeviceKind(bool exclusive, ma_uint32 rate, int bufferMs,
         static_cast<ma_uint32>(std::max<std::int64_t>(1, bufferMs / 2));  // periods=2
     config.periods = 2;
     config.dataCallback = &AudioBackend::StaticCallback;
+    config.notificationCallback = &AudioBackend::StaticNotification;  // M4-c 设备事件
     config.pUserData = this;
 
+    deviceLostSeen_.store(false, std::memory_order_relaxed);
     if (ma_device_init(&context_, &config, &device_) != MA_SUCCESS) {
         error = exclusive ? "exclusive ma_device_init failed" : "shared ma_device_init failed";
         return false;
@@ -296,6 +300,56 @@ void AudioBackend::CloseDeviceOnly() {
     }
 }
 
+void AudioBackend::StaticNotification(const ma_device_notification* n) {
+    if (n != nullptr && n->pDevice != nullptr && n->pDevice->pUserData != nullptr) {
+        static_cast<AudioBackend*>(n->pDevice->pUserData)->OnNotification(n);
+    }
+}
+
+// 通知线程（WASAPI 回调线程）：只置原子旗，重活交会话线程 tick 消费——
+// 零分配零阻塞红线；rerouted（共享模式 miniaudio 已自动重路由，这里刷新 facts）
+// 与 interruption/失效（独占不自动重路由，需上层重建）统一一面旗。
+void AudioBackend::OnNotification(const ma_device_notification* n) {
+    if (n->type == ma_device_notification_type_rerouted ||
+        n->type == ma_device_notification_type_interruption_began ||
+        n->type == ma_device_notification_type_interruption_ended) {
+        deviceEventPending_.store(true, std::memory_order_release);
+    }
+}
+
+bool AudioBackend::device_running() const {
+    // 名义 started 且未见过失效错误 = 设备活着（拔出/invalidated 的廉价判据）。
+    if (!deviceOpen_.load(std::memory_order_acquire)) return false;
+    if (deviceLostSeen_.load(std::memory_order_acquire)) return false;
+    return ma_device_is_started(const_cast<ma_device*>(&device_)) == MA_TRUE;
+}
+
+// M4-c devices.select：钉选设备并立即重开（调用方保证安全点）。id 空 = 回默认。
+bool AudioBackend::SelectDevice(const std::string& endpointId, std::string& error) {
+    if (endpointId.empty()) {
+        hasDeviceId_ = false;  // 跟随系统默认
+        return true;
+    }
+    // 在枚举表里找该 id（校验存在性；找不到 = bad_request 交上层）。
+    ma_device_info* pb = nullptr; ma_uint32 pbc = 0;
+    ma_device_info* cp = nullptr; ma_uint32 cpc = 0;
+    if (ma_context_get_devices(&context_, &pb, &pbc, &cp, &cpc) != MA_SUCCESS) {
+        error = "enum failed";
+        return false;
+    }
+    const std::wstring want = Utf8ToWideLocal(endpointId);
+    for (ma_uint32 i = 0; i < pbc; ++i) {
+        if (wcscmp(pb[i].id.wasapi, want.c_str()) == 0) {
+            lastDeviceId_ = pb[i].id;
+            hasDeviceId_ = true;
+            deviceFacts_.name = pb[i].name;
+            return true;
+        }
+    }
+    error = "unknown device id";
+    return false;
+}
+
 // M4-a 核心：播放期按源格式重开设备（独占/换率/降级）。调用方保证安全点（设备已停、
 // 解码已静默）。成功→facts_/decoder 输出率对齐；失败→降级共享（保出声优先）。
 bool AudioBackend::ReopenForTrack(ma_uint32 srcRate, std::string& why) {
@@ -319,9 +373,10 @@ bool AudioBackend::ReopenForTrack(ma_uint32 srcRate, std::string& why) {
         [this, srcRate](const OpenAttempt& a) -> OpenResult {
             OpenResult r;
             std::string err;
+            const ma_device_id* pin = hasDeviceId_ ? &lastDeviceId_ : nullptr;
             if (OpenDeviceKind(a.share == OutputMode::Exclusive,
                                a.share == OutputMode::Exclusive ? srcRate : mixRate_,
-                               a.bufferMs, err)) {
+                               a.bufferMs, err, pin)) {
                 r.ok = true;
                 return r;
             }

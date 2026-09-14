@@ -40,8 +40,8 @@ const char* kCaps[] = {
     "engine.toggle", "engine.seek", "engine.volume", "spectrum",
     // M6（协议 v1.5）：只读数据面——设备枚举与诊断计数。
     "devices.list", "diag.get",
-    // M4-a（协议 v1.6）：输出策略（独占协商/降级/升档）。devices.select 属 M4-c 不声明。
-    "output.mode",
+    // M4-a/c（协议 v1.6）：输出策略 + 设备切换。
+    "output.mode", "devices.select",
 };
 
 std::atomic<HANDLE> g_stopEvent{nullptr};
@@ -472,8 +472,9 @@ private:
                     rhine::proto::SafeBool(data, "auto_expand_buffer"),
                     rhine::proto::SafeDouble(data, "buffer_max_ms"));
             } else if (cmd == "devices.select") {
-                // M4-c 域（设备手动切换 + 热插拔监听），本批未启用。
-                throw rhine::NotImplemented{"cmd '" + cmd + "' is not implemented before M4-c"};
+                // M4-c（协议 v1.6）：钉选设备 + 重建链（id 空=回跟随默认）。
+                const auto id = rhine::proto::SafeString(data, "id").value_or("");
+                outcome = engine_.SelectDevice(id);
             } else if (cmd == "echo") {
                 // 桩的 M0 遗留测试面不属于真核心（caps 未声明）。
                 throw rhine::NotImplemented{"cmd 'echo' is not implemented by this core"};

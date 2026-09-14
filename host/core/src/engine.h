@@ -56,6 +56,10 @@ public:
     // M4-a（协议 v1.6 output.mode）：策略更新 + 有曲时立即重开设备（独占↔共享/换缓冲）。
     CommandOutcome SetOutputMode(const std::string& mode, std::optional<double> bufferMs,
                                  std::optional<bool> autoExpand, std::optional<double> bufferMaxMs);
+    // M4-c（协议 devices.select）：钉选设备（id 空=跟随默认）+ 有曲时立即重开链。
+    CommandOutcome SelectDevice(const std::string& id);
+    // M4-c：tick 消费设备事件旗（rerouted 刷新 / lost 或 playing 但设备停 → 暂停+上报）。
+    std::vector<std::pair<std::string, proto::Json>> MaybeHandleDeviceEvent();
     proto::Json Snapshot() const;  // engine.state 的 result（与 state 事件 payload 同构）
 
     // 会话 1Hz tick：任意状态发一帧 position；playing 且（播完或 EOF 排空）→ 自动 stopped。
