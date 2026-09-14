@@ -16,6 +16,9 @@ import { lyricView } from "./player/lyrics/lyric-view";
 import { albumWall, wallSession } from "./player/covers/album-wall";
 import { hydrateFromLibrary } from "./data";
 import { mountLibraryPanel } from "./player/library/library-panel";
+import { initMusicSettings } from "./settings/groups";
+// M6 设置三层 UI（壁纸构建无此面板，跳过观察器）：web=localStorage 镜像仅本机；desktop=壳 config 落盘。
+if (import.meta.env.MODE !== "wallpaper") initMusicSettings();
 
 if (bridge.desktop) {
   spectrumBridge.start();

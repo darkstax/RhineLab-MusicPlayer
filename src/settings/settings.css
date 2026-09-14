@@ -1,0 +1,675 @@
+/**
+ * M6 设置三层 UI 样式（src/settings/**）：沿用上游 settings-modal 的细线／近黑暖灰／
+ * 大写小字距语言；全部取 --theme-* 变量自动跟随明暗（与 lyric-view / player-bar /
+ * library-panel 同一套），状态色（直通绿／处理橙）在暗色下使用可辨识的提亮变体。
+ * 不引入新依赖、不加网格与绘制通道。
+ */
+
+.rhine-music-settings {
+  margin-top: 30px;
+  padding-top: 18px;
+  border-top: 1px solid var(--theme-line, #c1b8a7);
+  position: relative;
+}
+.rhine-music-settings .ms-kicker {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 18px;
+  font-size: 11px;
+  letter-spacing: 0.9px;
+  color: var(--theme-muted, #77756d);
+}
+.rhine-music-settings .ms-kicker > span:first-child {
+  color: var(--theme-ink, #080a08);
+  letter-spacing: 1.4px;
+}
+.rhine-music-settings .ms-storage {
+  font-size: 10px;
+  letter-spacing: 0.3px;
+}
+.rhine-music-settings .ms-storage b {
+  font-weight: 600;
+  color: var(--theme-accent, #9b7247);
+}
+.rhine-music-settings [data-ms-storage="local"] .ms-storage,
+.rhine-music-settings .ms-storage[data-ms-storage="local"] {
+  color: var(--theme-accent, #9b7247);
+}
+
+/* —— 三层导航 —— */
+.rhine-music-settings .ms-tier {
+  display: flex;
+  gap: 6px;
+  margin: 14px 0 6px;
+  border-bottom: 1px solid var(--theme-line, #bdb8ad);
+}
+.rhine-music-settings .ms-tier button {
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: 0.8px;
+  color: var(--theme-muted, #77756d);
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  padding: 10px 12px 9px;
+  cursor: pointer;
+}
+.rhine-music-settings .ms-tier button[aria-pressed="true"] {
+  color: var(--theme-ink, #080a08);
+  border-bottom-color: var(--theme-ink, #171713);
+}
+.rhine-music-settings .ms-tier-body {
+  padding: 4px 0 0;
+}
+.rhine-music-settings .ms-tier-title {
+  margin: 18px 0 10px;
+  font-size: 11px;
+  letter-spacing: 1.3px;
+  color: var(--theme-ink, #080a08);
+  font-weight: 400;
+}
+.rhine-music-settings .ms-tier-sub {
+  margin: 12px 0 0;
+  font-size: 11px;
+  color: var(--theme-muted, #77756d);
+}
+.rhine-music-settings .ms-tier-gap {
+  margin-top: 26px;
+  padding-top: 14px;
+  border-top: 1px solid var(--theme-line, #c5bda9);
+}
+
+/* —— 层 1：预设卡 —— */
+.rhine-music-settings .ms-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+}
+.rhine-music-settings .ms-preset {
+  font: inherit;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 15px;
+  color: var(--theme-ink, #080a08);
+  background: rgba(var(--theme-panel-rgb, 237, 235, 228), 0.6);
+  border: 1px solid var(--theme-line, #a6a49c);
+  border-radius: 8px;
+  backdrop-filter: blur(8px);
+  cursor: pointer;
+  transition: border-color 150ms ease, background 150ms ease;
+}
+.rhine-music-settings .ms-preset strong {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 1px;
+}
+.rhine-music-settings .ms-preset span,
+.rhine-music-settings .ms-preset small {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--theme-muted, #77756d);
+}
+.rhine-music-settings .ms-preset small.ms-preset-note {
+  color: var(--theme-accent, #9b7247);
+}
+.rhine-music-settings .ms-preset[aria-pressed="true"] {
+  border-color: var(--theme-ink, #171713);
+  background: var(--theme-field, #e7e3d9);
+}
+.rhine-music-settings .ms-preset:hover {
+  border-color: var(--theme-accent, #9b7247);
+}
+.rhine-music-settings .ms-preset-derived {
+  cursor: default;
+  border-style: dashed;
+  background: none;
+}
+.rhine-music-settings .ms-preset-derived:hover {
+  border-color: var(--theme-line, #a6a49c);
+}
+.rhine-music-settings .ms-preset-derived[aria-pressed="true"] {
+  border-style: solid;
+  border-color: var(--theme-ink, #171713);
+}
+
+/* —— 层 2：分组 —— */
+.rhine-music-settings .ms-group {
+  margin: 6px 0 0;
+  padding: 0 0 6px;
+  border: 0;
+  border-bottom: 1px solid var(--theme-line, #c1b8a7);
+}
+.rhine-music-settings .ms-group:last-of-type {
+  border-bottom: 0;
+}
+.rhine-music-settings .ms-group legend {
+  padding: 16px 0 2px;
+  font-size: 11px;
+  letter-spacing: 1.3px;
+  color: var(--theme-ink, #080a08);
+}
+.rhine-music-settings .ms-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 14px 0;
+  border-bottom: 1px solid rgba(var(--theme-line-rgb, 170, 165, 154), 0.5);
+  position: relative;
+}
+.rhine-music-settings .ms-group > .ms-field:last-child {
+  border-bottom: 0;
+}
+.rhine-music-settings .ms-field-copy strong {
+  display: block;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0.8px;
+  color: var(--theme-ink, #080a08);
+}
+.rhine-music-settings .ms-field-copy span {
+  display: block;
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--theme-muted, #938977);
+}
+.rhine-music-settings .ms-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.rhine-music-settings select,
+.rhine-music-settings .ms-num input,
+.rhine-music-settings input[type="text"] {
+  font: inherit;
+  font-size: 12px;
+  color: var(--theme-ink, #393d32);
+  background: var(--theme-field, #e7e3d9);
+  border: 1px solid var(--theme-line, #bdb4a1);
+  border-radius: 0;
+  padding: 8px 10px;
+  min-width: 120px;
+}
+.rhine-music-settings select {
+  max-width: 260px;
+}
+.rhine-music-settings select[data-ms-pending="1"] {
+  color: var(--theme-muted, #938977);
+  border-style: dashed;
+}
+.rhine-music-settings .ms-num {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.rhine-music-settings .ms-num input {
+  width: 92px;
+  min-width: 92px;
+  text-align: right;
+}
+.rhine-music-settings .ms-num small,
+.rhine-music-settings .ms-field-copy li {
+  font-size: 10px;
+  color: var(--theme-muted, #938977);
+}
+.rhine-music-settings .ms-field input[type="checkbox"] {
+  position: absolute;
+  right: 0;
+  opacity: 0;
+  width: 60px;
+  height: 40px;
+  cursor: pointer;
+}
+.rhine-music-settings .ms-field.disabled {
+  opacity: 0.55;
+}
+.rhine-music-settings .ms-field.disabled .ms-control {
+  pointer-events: none;
+}
+.rhine-music-settings .ms-constraint {
+  color: var(--theme-accent, #9b7247);
+}
+.rhine-music-settings .ms-tri button,
+.rhine-music-settings .ms-upstream .ms-control button,
+.rhine-music-settings .ms-roots-field button,
+.rhine-music-settings [data-ms-group] .theme-choices button {
+  font: inherit;
+  font-size: 11px;
+  min-width: 68px;
+  min-height: 34px;
+  padding: 6px 10px;
+  color: var(--theme-ink, #080a08);
+  background: none;
+  border: 1px solid var(--theme-line, #a6a49c);
+  cursor: pointer;
+}
+.rhine-music-settings .ms-tri button[aria-pressed="true"],
+.rhine-music-settings [data-ms-group] .theme-choices button[aria-pressed="true"] {
+  background: var(--theme-ink, #171713);
+  color: var(--theme-paper, #ece9e4);
+  border-color: var(--theme-ink, #171713);
+}
+.rhine-music-settings .ms-roots {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 11px;
+  color: var(--theme-muted, #938977);
+}
+.rhine-music-settings .ms-roots li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 460px;
+}
+.rhine-music-settings .ms-inline-note {
+  display: block;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--theme-muted, #938977);
+}
+
+/* —— 层 3：信号路径图（Roon 式横条；只渲染不判断）—— */
+.signal-path {
+  position: relative;
+  margin: 12px 0 0;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--theme-line, #bdb8ad);
+  border-radius: 10px;
+  background: rgba(var(--theme-panel-rgb, 237, 235, 228), 0.72);
+  backdrop-filter: blur(10px);
+  color: var(--theme-ink, #080a08);
+  overflow: hidden;
+}
+.signal-path .sp-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+}
+.signal-path .sp-kicker {
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  color: var(--theme-muted, #77756d);
+}
+.signal-path .sp-badge {
+  font-size: 10px;
+  letter-spacing: 1px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--theme-line, #aaa59a);
+  color: var(--theme-muted, #77756d);
+  white-space: nowrap;
+}
+.signal-path .sp-badge.sp-green {
+  color: #1f6b46;
+  border-color: #2f9e68;
+  background: rgba(47, 158, 104, 0.12);
+}
+.signal-path .sp-badge.sp-amber {
+  color: #8a5a18;
+  border-color: #c98a2e;
+  background: rgba(201, 138, 46, 0.13);
+}
+.signal-path .sp-badge.sp-grey {
+  color: #565c46;
+  border-color: #8b8577;
+  background: rgba(139, 133, 119, 0.12);
+}
+:is([data-dark-surface="true"]) .signal-path .sp-badge.sp-green {
+  color: #7fdcae;
+  border-color: #3fae76;
+}
+:is([data-dark-surface="true"]) .signal-path .sp-badge.sp-amber {
+  color: #f0c07a;
+  border-color: #c98a2e;
+}
+:is([data-dark-surface="true"]) .signal-path .sp-badge.sp-grey {
+  color: #bfc6b6;
+  border-color: #6c7a6f;
+}
+
+/* 双环视觉语言：外层走马灯细环（stroke 由 SVG 呈现，不新增绘制通道）。 */
+.signal-path .sp-ribbon,
+.signal-path .sp-idle-ribbon {
+  position: absolute;
+  right: -34px;
+  top: -34px;
+  width: 118px;
+  height: 118px;
+  pointer-events: none;
+  opacity: 0.5;
+}
+.signal-path .sp-ribbon::before,
+.signal-path .sp-ribbon::after,
+.signal-path .sp-idle-ribbon::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1px solid var(--theme-line, #a6a49c);
+}
+.signal-path .sp-ribbon::after {
+  inset: 16px;
+  border-style: dashed;
+  border-color: var(--theme-accent, #9b7247);
+}
+.signal-path .sp-idle-ribbon::before {
+  border-style: dashed;
+}
+.signal-path .sp-chain {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  margin-top: 12px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.signal-path .sp-node {
+  flex: 1 1 0;
+  min-width: 118px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  gap: 2px 8px;
+  padding: 10px 11px;
+  border: 1px solid var(--theme-line, #b7b0a2);
+  border-left-width: 3px;
+  border-radius: 6px;
+  background: rgba(var(--theme-field-rgb, 231, 227, 217), 0.7);
+}
+.signal-path .sp-node .sp-node-name {
+  grid-column: 1;
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--theme-ink, #080a08);
+}
+.signal-path .sp-node .sp-node-state {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  font-size: 11px;
+}
+.signal-path .sp-node .sp-node-detail {
+  grid-column: 1;
+  font-size: 10px;
+  color: var(--theme-muted, #77756d);
+}
+.signal-path .sp-node.sp-passthrough {
+  border-left-color: #2f9e68;
+}
+.signal-path .sp-node.sp-passthrough .sp-node-state {
+  color: #1f6b46;
+}
+.signal-path .sp-node.sp-processed-node {
+  border-left-color: #c98a2e;
+}
+.signal-path .sp-node.sp-processed-node .sp-node-state {
+  color: #8a5a18;
+}
+:is([data-dark-surface="true"]) .signal-path .sp-node.sp-passthrough {
+  border-left-color: #3fae76;
+}
+:is([data-dark-surface="true"]) .signal-path .sp-node.sp-passthrough .sp-node-state {
+  color: #7fdcae;
+}
+:is([data-dark-surface="true"]) .signal-path .sp-node.sp-processed-node {
+  border-left-color: #d99a3e;
+}
+:is([data-dark-surface="true"]) .signal-path .sp-node.sp-processed-node .sp-node-state {
+  color: #f0c07a;
+}
+.signal-path .sp-link {
+  align-self: center;
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--theme-muted, #938977);
+  white-space: nowrap;
+}
+.signal-path .sp-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 26px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--theme-line, #bdb8ad);
+}
+.signal-path .sp-meta > div {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--theme-muted, #77756d);
+}
+.signal-path .sp-meta strong {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--theme-ink, #080a08);
+  font-variant-numeric: tabular-nums;
+}
+.signal-path .sp-meta i {
+  font-style: normal;
+  font-size: 10px;
+  color: var(--theme-muted, #938977);
+}
+.signal-path .sp-format small {
+  margin-left: 6px;
+  font-size: 10px;
+  color: var(--theme-muted, #938977);
+}
+.signal-path .sp-factors-block {
+  margin-top: 10px;
+  font-size: 10px;
+  letter-spacing: 1.2px;
+  color: var(--theme-muted, #77756d);
+}
+.signal-path .sp-factors {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  letter-spacing: 0.4px;
+}
+.signal-path .sp-factors li {
+  padding: 3px 8px;
+  border: 1px solid var(--theme-accent, #9b7247);
+  border-radius: 999px;
+  color: var(--theme-accent, #9b7247);
+  font-size: 10px;
+}
+.signal-path .sp-factors-empty {
+  display: block;
+  margin: 6px 0 0;
+  font-size: 10px;
+  color: var(--theme-muted, #938977);
+}
+/* 灰态：引擎未接入（协议 §6 桩豁免）。 */
+.signal-path.sp-absent {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border-style: dashed;
+  background: rgba(var(--theme-field-rgb, 231, 227, 217), 0.4);
+}
+.signal-path.sp-absent .sp-absent-copy strong {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 1.4px;
+  color: var(--theme-muted, #77756d);
+}
+.signal-path.sp-absent .sp-absent-copy span {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--theme-muted, #938977);
+}
+
+/* —— 层 3：诊断卡 —— */
+.dg-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.dg-card {
+  padding: 12px 14px 14px;
+  border: 1px solid var(--theme-line, #bdb8ad);
+  border-radius: 10px;
+  background: rgba(var(--theme-panel-rgb, 237, 235, 228), 0.68);
+  backdrop-filter: blur(10px);
+}
+.dg-card h4 {
+  margin: 0 0 8px;
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 1.3px;
+  color: var(--theme-muted, #77756d);
+}
+.dg-rows {
+  display: grid;
+  gap: 2px;
+}
+.dg-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 5px 0;
+  border-bottom: 1px dotted rgba(var(--theme-line-rgb, 170, 165, 154), 0.55);
+  font-size: 11px;
+}
+.dg-row:last-child {
+  border-bottom: 0;
+}
+.dg-row span {
+  color: var(--theme-muted, #77756d);
+}
+.dg-row strong {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--theme-ink, #080a08);
+  text-align: right;
+}
+.dg-row.dg-muted strong {
+  font-weight: 400;
+  color: var(--theme-muted, #938977);
+}
+.dg-negotiated {
+  grid-column: 1 / -1;
+}
+.dg-negotiated .signal-path {
+  margin-top: 4px;
+}
+.dg-quarantine {
+  grid-column: 1 / -1;
+}
+.dg-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.dg-table th {
+  text-align: left;
+  padding: 4px 8px 6px;
+  font-weight: 400;
+  letter-spacing: 1px;
+  font-size: 10px;
+  color: var(--theme-muted, #77756d);
+  border-bottom: 1px solid var(--theme-line, #bdb8ad);
+}
+.dg-table td {
+  padding: 6px 8px;
+  border-bottom: 1px dotted rgba(var(--theme-line-rgb, 170, 165, 154), 0.5);
+  color: var(--theme-ink, #080a08);
+  font-variant-numeric: tabular-nums;
+}
+.dg-table td.dg-path {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dg-table .dg-muted {
+  color: var(--theme-muted, #938977);
+}
+.dg-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.dg-actions button {
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  padding: 9px 14px;
+  color: var(--theme-ink, #080a08);
+  background: var(--theme-field, #e7e3d9);
+  border: 1px solid var(--theme-line, #bdb4a1);
+  cursor: pointer;
+}
+.dg-actions button:hover {
+  border-color: var(--theme-accent, #9b7247);
+  color: var(--theme-accent, #9b7247);
+}
+.dg-lognote {
+  margin-top: 12px;
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--theme-muted, #938977);
+}
+
+/* —— 面板内提示 —— */
+.rhine-music-settings .ms-toast {
+  position: absolute;
+  right: 0;
+  bottom: 4px;
+  max-width: 60%;
+  padding: 9px 12px;
+  font-size: 11px;
+  color: var(--theme-paper, #fff);
+  background: var(--theme-ink, #171713);
+  border-radius: 6px;
+  opacity: 0;
+  transform: translateY(6px);
+  pointer-events: none;
+  transition: opacity 200ms ease, transform 200ms ease;
+}
+.rhine-music-settings .ms-toast[data-show="1"] {
+  opacity: 1;
+  transform: none;
+}
+
+/* —— 窄屏（沿用上游纵向习惯）—— */
+@media (max-width: 700px) {
+  .rhine-music-settings .ms-field {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .rhine-music-settings .ms-control {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .rhine-music-settings select {
+    max-width: 100%;
+  }
+  .rhine-music-settings .ms-roots li {
+    max-width: 70vw;
+  }
+}
+
+/* 减少动态效果：直接切换，无过渡（上游既有约定）。 */
+@media (prefers-reduced-motion: reduce) {
+  .rhine-music-settings *,
+  .signal-path *,
+  .dg-card * {
+    transition: none !important;
+  }
+}

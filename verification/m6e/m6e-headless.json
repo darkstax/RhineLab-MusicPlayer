@@ -1,0 +1,141 @@
+{
+  "checks": [
+    {
+      "name": "A0 desktop 模式识别（bridge.desktop）",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "A1 探针注册（window.__rhineSettings）",
+      "ok": true,
+      "detail": "true"
+    },
+    {
+      "name": "A2 设置面板挂载（三层导航可见）",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "A3 三层导航文案",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "A4 面板开合（关闭→重开自动接管）",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "A5 发烧预设 → 壳 config 落盘（dot-path 全序列）",
+      "ok": true,
+      "detail": "{\"output.mode\":\"shared\",\"quality.volume_mode\":\"fixed\",\"quality.resample\":\"off\",\"quality.gapless\":true,\"quality.replay_gain\":\"off\",\"quality.dedither\":false,\"quality.crossfade_ms\":0}"
+    },
+    {
+      "name": "A6 发烧文案明写独占未开放",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "A7 config.set 调用序列（7 键、无重复）",
+      "ok": true,
+      "detail": "[\"output.mode\",\"quality.volume_mode\",\"quality.resample\",\"quality.gapless\",\"quality.replay_gain\",\"quality.dedither\",\"quality.crossfade_ms\"]"
+    },
+    {
+      "name": "A8 预设互斥单选（日常回选 active）",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "A9 devices.list 就绪 → 真设备下拉（非占位）",
+      "ok": true,
+      "detail": "[\"系统默认设备\",\"CX31993 MAX97220PRO (USB) · 默认\",\"Realtek ALC256\"]"
+    },
+    {
+      "name": "A10 分组改动 → config.set 落盘",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "A11 灰显通道渲染（占位/约束 ⊘ 文案进 DOM）",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "A12-1 信号路径图 null → absent（引擎未接入）",
+      "ok": true,
+      "detail": "absent"
+    },
+    {
+      "name": "A12-1b null 态 DOM：灰态文案 + 零伪造节点",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "A12-2 app-perfect：节点数=3 且逐字透传/passthrough",
+      "ok": true,
+      "detail": "{\"status\":\"live\",\"nodes\":[\"decoder:true\",\"resample:true\",\"volume:false\"],\"badge\":\"APP-PERFECT\",\"badgeClass\":\"sp-badge sp-amber\",\"factors\":[\"shared-mixer\"]}"
+    },
+    {
+      "name": "A12-2b app-perfect 徽章橙 + factors 呈现",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "A12-3 processed：全处理节点 + 4 因子 + 升档如实",
+      "ok": true,
+      "detail": "{\"badge\":\"PROCESSED\",\"allProcessed\":true,\"factors\":[\"shared-mixer\",\"float-decode\",\"resample\",\"float-volume\"],\"expanded\":true,\"rate\":\"48000\"}"
+    },
+    {
+      "name": "A13 诊断页：diag.get 真数据 + quarantine 表行 + framesLost + 导出钮",
+      "ok": true,
+      "detail": "{\"diagReady\":true,\"quarantineReady\":true,\"hasUnderrun\":true,\"hasQuarantineRow\":true,\"hasFramesLost\":true,\"hasExport\":true}"
+    },
+    {
+      "name": "A14(降级)",
+      "ok": true,
+      "detail": "下载事件不可达：Error: download.saveAs: canceled（Blob 触发无页面异常）"
+    },
+    {
+      "name": "A15 桌面页 pageerror=0",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "B1 web 模式：desktop=false + 明标「仅本机生效」",
+      "ok": true,
+      "detail": "{\"desktop\":false,\"storageText\":\"本机镜像模式 · 仅本机生效（设置写入浏览器 localStorage）\",\"storageAttr\":\"local\"}"
+    },
+    {
+      "name": "B2 设备下拉占位「待 M6-F 接线」（无 bridge）",
+      "ok": true,
+      "detail": "待 M6-F 接线"
+    },
+    {
+      "name": "B3 web 预设落盘仅 localStorage 镜像",
+      "ok": true,
+      "detail": "{\"output.mode\":\"shared\",\"quality.volume_mode\":\"fixed\",\"quality.resample\":\"off\",\"quality.gapless\":true,\"quality.replay_gain\":\"off\",\"quality.dedither\":false,\"quality.crossfade_ms\":0}"
+    },
+    {
+      "name": "B4 web 精细项 → 镜像 dot-path 生效",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "B5 web 信号路径图=引擎未接入灰态（零异常）",
+      "ok": true,
+      "detail": "ENGINE OFFLINE\n引擎未接入 · negotiated = null（协议 §6 桩豁免）"
+    },
+    {
+      "name": "B6 web 页 pageerror=0",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "B7 web console error=0（排除环境噪声）",
+      "ok": true,
+      "detail": ""
+    }
+  ],
+  "errors": [],
+  "allOk": true
+}
