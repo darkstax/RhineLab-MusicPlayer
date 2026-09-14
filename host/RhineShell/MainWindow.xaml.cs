@@ -19,6 +19,9 @@ public partial class MainWindow : Window
     /// <summary>虚拟主机名；映射与导航必须用同一个 hostName，否则 WebView2 会把它当真实域名解析而导航失败。</summary>
     private const string VirtualHost = "app.rhine.local";
 
+    /// <summary>封面虚拟主机（协议 v1.4 §5.1）：指向 %LOCALAPPDATA%\RhineMusic\covers。</summary>
+    private const string CoverHost = "cover.rhine.local";
+
     private readonly ShellOptions _options;
     private readonly WebView2 _view = new();
     private readonly TextBlock _fallback = new();
@@ -128,6 +131,22 @@ public partial class MainWindow : Window
 
             _view.CoreWebView2.SetVirtualHostNameToFolderMapping(
                 VirtualHost, _options.DistDirectory, CoreWebView2HostResourceAccessKind.DenyCors);
+            // 协议 v1.4 §5.1（M5a）：封面内容寻址目录映射到 cover.rhine.local——
+            // 前端 THREE 纹理/详情封面直读 https://cover.rhine.local/sha1-<hex>.jpg，零 IPC 载荷。
+            // 目录由 Scanner 首次落盘时自建；这里预建空目录保证映射不报错。
+            try
+            {
+                var covers = RhineShell.Library.Covers.Directory;
+                System.IO.Directory.CreateDirectory(covers);
+                // AllowCors：app.rhine.local 页面的 fetch/THREE.TextureLoader 跨源取封面
+                // 需要 CORS（DenyCors 会污染 WebGL canvas / fetch 直接抛）；封面是本地非机密资源。
+                _view.CoreWebView2.SetVirtualHostNameToFolderMapping(
+                    CoverHost, covers, CoreWebView2HostResourceAccessKind.Allow);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Log.Warn($"cover host mapping failed: {ex.GetType().Name}: {ex.Message}");
+            }
             // 任务书 B4：--dev 直连 vite 服务（HMR 改 UI 不重编壳）；无参数行为不变。
             _view.CoreWebView2.Navigate(_options.Dev ? ShellOptions.DevUrl : $"https://{VirtualHost}/index.html");
         }

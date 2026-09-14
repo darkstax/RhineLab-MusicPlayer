@@ -16,6 +16,11 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4191.47" />
+    <!-- M5a（M5-PLAN-v2 §1.1）：仅两个新增 NuGet 依赖，许可证均 MIT（TagLibSharp2 0.6.0
+         取代 LGPL 的 TagLib#；Microsoft.Data.Sqlite 10.0.12 随包 SQLitePCLRaw bundle_e_sqlite3，
+         含 FTS5+trigram——首启 sqlite-probe 自检，R-7.1-a）。 -->
+    <PackageReference Include="TagLibSharp2" Version="0.6.0" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
   </ItemGroup>
 
   <ItemGroup>

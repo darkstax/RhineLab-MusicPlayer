@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows;
 using RhineShell.Hosting;
+using RhineShell.Library;
 
 namespace RhineShell;
 
@@ -30,6 +31,20 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        _options = ShellOptions.FromCommandLine(e.Args);
+
+        // M5a 验收 §4.6：无头自检开关（--cli-scan/--cli-query/…）——不开窗、不抢实例锁、
+        // stdout 末行 JSON、退出码 0=成/1=败（专为无人值守，不进产品 UI）。
+        if (_options.CliScan || _options.CliMode is not null)
+        {
+            var code = Cli.Run(_options);
+            Console.Out.Flush();
+            // Shutdown() 在 Run() 前调用会抛 InvalidOperationException（WPF 契约）；
+            // 无头模式根本不开窗口，直接终止进程。
+            Environment.Exit(code);
+            return;
+        }
+
         try
         {
             var hr = SetCurrentProcessExplicitAppUserModelID(AppUserModelId);

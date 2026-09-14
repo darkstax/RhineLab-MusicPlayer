@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using System.Windows.Threading;
 using Microsoft.Web.WebView2.Wpf;
 using RhineShared;
+using RhineShell.Library;
 
 namespace RhineShell.Hosting;
 
@@ -25,11 +26,13 @@ public sealed class Bridge
     private readonly ShellChannel _channel;
     private readonly Dispatcher _dispatcher = Dispatcher.CurrentDispatcher;
     private readonly Action<JsonObject> _post;
+    private readonly LibraryApi _library;
 
     public Bridge(ShellChannel channel, Action<JsonObject> post)
     {
         _channel = channel;
         _post = post;
+        _library = new LibraryApi(frame => Post(frame));
         _channel.FrameReceived += OnCoreFrame;
     }
 
@@ -163,7 +166,8 @@ public sealed class Bridge
         ["t"] = "hello",
         ["role"] = "shell",
         ["proto"] = 1,
-        ["caps"] = new JsonArray("cmd", "evt.state", "evt.position", "smtc"),
+        // 协议 v1.4 §4：曲库能力落地即声明（前端据此启用 library-store；桩/无库环境优雅降级）。
+        ["caps"] = new JsonArray("cmd", "evt.state", "evt.position", "smtc", "library"),
         ["app"] = "rhine-music-player",
         ["ver"] = "0.1.0",
     };
@@ -183,6 +187,28 @@ public sealed class Bridge
         {
             Post(ConfigCommand(id, cmd, frame));
             return;
+        }
+
+        // 协议 v1.4 §5（M5a）：library.* 全部壳侧自答（DB 在壳内，不经核心管道；
+        // 与 config.* 同路由位）。扫描/查询的错误码映射在 LibraryApi（§7）。
+        if (cmd.StartsWith("library.", StringComparison.Ordinal))
+        {
+            // 扫描可长（全库 44GB 首轮），放线程池避免堵其它命令的回调。
+            _ = Task.Run(() => Post(_library.Handle(id, cmd, frame)));
+            return;
+        }
+
+        // 协议 v1.4 §5.1：engine.play 的 lib:<id> 在转发核心前解析为 file:<绝对路径>
+        //（核心 scheme 面零改动）；解析失败回 bad_request{unknown lib id}（壳侧产生）。
+        if (cmd == "engine.play")
+        {
+            var resolved = _library.ResolvePlayTrack(frame, out var playError);
+            if (resolved is null)
+            {
+                Post(playError!);
+                return;
+            }
+            frame = resolved;
         }
 
         // 协议 §5（M5c/v1.4）：lyric.show / taskbar.set 壳侧自答 + 事件钩子（不经核心）。
@@ -275,7 +301,10 @@ public sealed class Bridge
 
         try
         {
-            _post(frame);
+            // v1.4 §5.1：lib: 会话内核心回报的 file: track_id 在**出站副本**上改写回 lib:<id>
+            //（M5b 歌词/M5d 播放断言前提）；原帧不动——SMTC 观察者与 LatestState 缓存继续
+            // 看核心原始形态；非曲库帧为 no-op（直接返回原引用）。
+            _post(_library.RewriteForFrontend(frame));
         }
         catch (ObjectDisposedException ex)
         {

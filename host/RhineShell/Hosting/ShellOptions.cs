@@ -46,8 +46,24 @@ public sealed class ShellOptions
     /// 命令行参数优先级高于配置。</summary>
     public bool NoSmtc { get; init; }
 
+    /// <summary>M5a 无头自检（验收 §4.6）：<c>--cli-scan [root...]</c> 扫完 stdout 末行 JSON 退出；
+    /// <c>--cli-query &lt;q&gt;</c> 查一条；<c>--cli-sqlite-probe</c> / <c>--cli-fts-verify</c> / <c>--cli-quarantine</c>。
+    /// 与 --core-exe/--no-smtc 同族，专为无人值守验收，不进产品 UI。</summary>
+    public string? CliMode { get; init; }
+
+    /// <summary>--cli-query 的参数（查询串或 id）。</summary>
+    public string? CliArg { get; init; }
+
+    /// <summary>--cli-scan 的可选 roots（其后所有非开关参数）。注意 Value() 取的是后继一项。</summary>
+    public string[] CliRoots { get; init; } = [];
+
+    public bool CliScan { get; init; }
+
+    /// <summary>--cli-full：--cli-scan 忽略 mtime 增量，强制重读全部元数据（封面修复后重扫用）。</summary>
+    public bool CliFull { get; init; }
+
     public string Describe() =>
-        $"dist=\"{DistDirectory}\" pipe=\"{PipeName}\" coreDisabled={CoreDisabled} devtools={OpenDevTools} dev={Dev} cdp={RemoteDebugPort} coreExe={(CoreExe ?? "(stub)")} noSmtc={NoSmtc}";
+        $"dist=\"{DistDirectory}\" pipe=\"{PipeName}\" coreDisabled={CoreDisabled} devtools={OpenDevTools} dev={Dev} cdp={RemoteDebugPort} coreExe={(CoreExe ?? "(stub)")} noSmtc={NoSmtc} cli={CliMode ?? (CliScan ? "scan" : "(none)")}";
 
     public static ShellOptions FromCommandLine(string[] args)
     {
@@ -55,6 +71,12 @@ public sealed class ShellOptions
         var pipe = Value(args, "--pipe")
             ?? Environment.GetEnvironmentVariable("RHINE_CORE_PIPE")
             ?? DefaultPipe;
+        var cliMode = args.Contains("--cli-sqlite-probe") ? "sqlite-probe"
+            : args.Contains("--cli-fts-verify") ? "fts-verify"
+            : args.Contains("--cli-quarantine") ? "quarantine"
+            : args.Contains("--cli-query") ? "query"
+            : args.Contains("--cli-stats") ? "stats"
+            : null;
 
         return new ShellOptions
         {
@@ -69,7 +91,23 @@ public sealed class ShellOptions
                 ? port
                 : 0,
             NoSmtc = args.Contains("--no-smtc"),
+            CliScan = args.Contains("--cli-scan"),
+            CliFull = args.Contains("--cli-full"),
+            CliMode = cliMode,
+            CliArg = Value(args, "--cli-query"),
+            CliRoots = AfterFlag(args, "--cli-scan"),
         };
+    }
+
+    /// <summary>--cli-scan 后面的全部非 -- 开头参数 = roots 列表（可省 = config 根）。</summary>
+    private static string[] AfterFlag(string[] args, string name)
+    {
+        var index = Array.IndexOf(args, name);
+        if (index < 0) return [];
+        var list = new List<string>();
+        for (var i = index + 1; i < args.Length && !args[i].StartsWith("--", StringComparison.Ordinal); i++)
+            list.Add(args[i]);
+        return list.ToArray();
     }
 
     private static string? Value(string[] args, string name)
