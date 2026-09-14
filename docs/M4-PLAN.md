@@ -63,3 +63,25 @@
 - 探测独占的副作用：探测=尝试 open，可能闪断对方音频——**只在曲间间隙/暂停时探测**，
   不在对方播放中主动骚扰（keep 是"我占着不让"，不是"我抢别人的"）。
 - 蓝牙 A2DP 在 Windows 上通常枚举不到独占（预期内），若某耳机支持则按能力矩阵如实显示。
+
+## 实施记录（主进程，09-14）
+
+### M4-a ✅（代码+机制验证完成；听感=交互点①待用户）
+- OutputPolicy 纯逻辑 harness 35/35；接线中发现并修两真 bug：
+  ① succeed() 用 current_=out 抹掉 Note 累积的 timeline（账本改独立成员持久化）；
+  ② auto 落 shared 漏记 degraded（判定改"请求非 shared 而达成 shared 即降级"）。
+- **枚举表陷阱（excl-probe 实测）**：miniaudio WASAPI 枚举不填 nativeDataFormats
+  （三端点全 formats=0）→ ExclusiveCapable 预探测永假 → 改"试开即探测"
+  （ReopenForTrack 直接 ma_device_init(EXCLUSIVE)，失败降级——恰是 §7.2 语义）；
+  devices.list.exclusive 三态化（null=未知/已开=实况/有表=探测），协议 v1.6。
+- SetOutputMode 自查修正：Freeze+Reopen 会让 decoder 输出率与新设备脱节（音高/位置错位）
+  → 改 CloseTrack→OpenTrack 完整重建链（decoder 按新 appRate 重建），失败路径对齐 Play 清理。
+- 默认值纪律：OutputPolicyConfig.mode 默认 **Shared**（§15"独占绝不默认开"；
+  初版默认 Auto 会在首播静默抢独占，自查修正）。
+- 结果形状统一：output.mode ack = {negotiated:{...}}（协议表字面嵌套，桩/真核心一致；
+  冒烟脚本两次踩平铺/嵌套分歧后对齐）。
+- 验证：excl-smoke 双模 PASS（真核心 exclusive→bit-perfect factors=[]、exclusive↔shared
+  往返位置连续 4080→4120；桩假协商注入 state 快照生效）；diag-smoke v1.6 三态断言双模 PASS；
+  smoke.ps1 PASS；m1-scenario 桩裁判 ALL PASS；m-verify quick -NoCache 六步全绿。
+- 桩假数据：假设备矩阵 exclusive 按 §23 实测档（DAC 8 档 16/32、Realtek 6 档、Steam 仅 16）；
+  FakeEngine.FakeNegotiated 注入点（不调 output.mode 时保持 M1 豁免 null，裁判断言不破）。

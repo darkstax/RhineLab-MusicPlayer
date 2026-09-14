@@ -20,7 +20,9 @@ namespace rhine {
 enum class OutputMode { Shared, Exclusive, Auto };
 
 struct OutputPolicyConfig {
-  OutputMode mode = OutputMode::Auto;      // 用户请求（config output.mode）
+  // §15 默认值纪律：**独占绝不默认开**（默认 Auto 会在首播就静默抢独占、吓到普通用户）
+  // ——核心默认 Shared；auto/exclusive 由设置预设或 output.mode 显式开启。
+  OutputMode mode = OutputMode::Shared;    // 用户请求（config output.mode）
   int requestedBufferMs = 10;              // 用户基准缓冲
   bool autoExpandBuffer = true;            // Q1-c 主对策开关
   int bufferMaxMs = 300;                   // 升档天花板（用户经验值）
@@ -78,6 +80,9 @@ public:
   void UpdateConfig(const OutputPolicyConfig& config);
 
   const Negotiation& current() const { return current_; }
+  const OutputPolicyConfig& config() const { return config_; }  // 读回现策略（engine 改前取值）
+  // M4 接线：IO 层降级事实记入时间线（不改变状态机，纯账本）。
+  void NoteDegrade(const std::string& line) { Note(line); }
   OutputMode requested() const { return config_.mode; }
   int bufferMs() const { return bufferMs_; }
   bool autoExpanded() const { return current_.autoExpanded; }

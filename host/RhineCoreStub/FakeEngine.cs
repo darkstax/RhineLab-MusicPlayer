@@ -92,6 +92,12 @@ public sealed class FakeEngine
     }
 
     /// <summary>协议 §5 engine.state 的快照 result（与 state 事件 payload 同构）。</summary>
+    /// <summary>M4-a（协议 v1.6）：output.mode 假协商注入点——null = 保持 §6 的 M1 桩豁免
+    /// （negotiated/badges 皆 null，m1-scenario 断言不破）；非 null 时 state 快照携带假
+    /// negotiated/badges（前端信号路径图/徽章三态在无真核心时也可演示）。</summary>
+    public static volatile Dictionary<string, object?>? FakeNegotiated;
+    public static volatile Dictionary<string, object?>? FakeBadges;
+
     public Dictionary<string, object?> Snapshot() => new()
     {
         ["state"] = State.ToWire(),
@@ -100,8 +106,8 @@ public sealed class FakeEngine
         ["duration_ms"] = DurationMs,
         ["volume"] = Volume,
         // §6：M1 桩豁免——引擎未接入时 negotiated/badges 输出 null（不得省略、不得自加替代字段）。
-        ["negotiated"] = null,
-        ["badges"] = null,
+        ["negotiated"] = FakeNegotiated,
+        ["badges"] = FakeBadges,
     };
 
     private EngineEvent StateEvent() => new("state", Snapshot());

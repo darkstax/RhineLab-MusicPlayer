@@ -149,10 +149,11 @@ Write-Host "obj-track_id -> $($err.error.code)"
 $writer.WriteLine('{not json')
 $err = Wait-Frame 'err' 5000 { param($f) $f.error.code -eq 'bad_request' }
 Write-Host "garbage line -> $($err.error.code)"
+# M6-F（协议 v1.5）：devices.list 转正只读实现（not_implemented 断言作废，
+# 形状验证归 tools/m6-smoke/diag-smoke.ps1）；这里只验不崩 + 有应答。
 Send @{ v = 1; t = 'cmd'; id = 's-8'; cmd = 'devices.list' }
-$err = Wait-Frame 'err' 5000 { param($f) $f.id -eq 's-8' }
-if ($err.error.code -ne 'not_implemented') { Fail "devices.list -> $($err.error.code)" }
-Write-Host "devices.list -> $($err.error.code)"
+$rep = Wait-Frame 'ack' 5000 { param($f) $f.id -eq 's-8' }
+if ($null -eq $rep) { Fail 'devices.list: no ack (M6-F 只读面回归?)' } else { Write-Host 'devices.list -> ack' }
 if ($proc.HasExited) { Fail 'core died on bad frames' }
 
 Write-Host "=== bye ==="

@@ -191,50 +191,91 @@ bool AudioBackend::OpenDevice(std::string& error) {
         error = "ma_context_init failed (no audio backend?)";
         return false;
     }
+    if (!CacheDefaultEndpoint()) {  // 枚举默认端点：name/mix 格式/独占能力表
+        ma_context_uninit(&context_);
+        error = "ma_device_init failed (no default render endpoint?)";
+        return false;
+    }
+    // 启动默认共享（播放期按源格式可切独占，见 ReopenForTrack / M4）。
+    return OpenDeviceKind(/*exclusive=*/false, mixRate_, policy_.bufferMs(), error);
+}
 
-    // 读默认端点缓存信息：名字 + 首个可信混音格式（避免设备层再插一级内部重采样）。
+// 枚举默认端点缓存：混音格式（避免设备层内部重采样）+ 独占能力表
+// （nativeDataFormats 的 MA_DATA_FORMAT_FLAG_EXCLUSIVE_MODE 位，s32 容器才算——
+//  §23 实锤 float32 独占全设备不支持）。
+bool AudioBackend::CacheDefaultEndpoint() {
     ma_device_info* playbackInfos = nullptr;
     ma_uint32 playbackCount = 0;
     ma_device_info* captureInfos = nullptr;
     ma_uint32 captureCount = 0;
-    ma_context_get_devices(&context_, &playbackInfos, &playbackCount, &captureInfos, &captureCount);
-
-    ma_format mixFormat = ma_format_f32;
-    ma_uint32 mixChannels = 2;
-    ma_uint32 mixRate = 48000;
+    if (ma_context_get_devices(&context_, &playbackInfos, &playbackCount, &captureInfos,
+                               &captureCount) != MA_SUCCESS) {
+        return false;
+    }
+    exclusiveFormats_.clear();
     for (ma_uint32 i = 0; i < playbackCount; ++i) {
         if (!playbackInfos[i].isDefault) continue;
         deviceFacts_.name = playbackInfos[i].name;
+        lastDeviceId_ = playbackInfos[i].id;
+        hasDeviceId_ = true;
         for (ma_uint32 f = 0; f < playbackInfos[i].nativeDataFormatCount; ++f) {
             const auto& df = playbackInfos[i].nativeDataFormats[f];
-            if (df.format == ma_format_f32 && df.channels == 2 && df.sampleRate >= 8000) {
-                mixFormat = df.format;
-                mixChannels = df.channels;
-                mixRate = df.sampleRate;
-                break;
+            if (df.channels != 2 || df.sampleRate < 8000) continue;
+            if (mixRate_ == 0 && df.format == ma_format_f32) {
+                mixFormat_ = df.format;
+                mixRate_ = df.sampleRate;
+            }
+            // 独占能力：s16/s32 容器 + EXCLUSIVE 标志位（s24 设备一般以 s32 容器上报）。
+            const bool integer = df.format == ma_format_s16 || df.format == ma_format_s32;
+            if (integer && (df.flags & MA_DATA_FORMAT_FLAG_EXCLUSIVE_MODE) != 0) {
+                exclusiveFormats_.emplace_back(df.sampleRate, FormatBits(df.format));
             }
         }
         break;
     }
+    if (mixRate_ == 0) mixRate_ = 48000;  // 无 f32 混音上报时的兜底（共享几乎总可开）
+    return true;
+}
 
+// 枚举表参考（仅 devices.list 展示用；M4-a 实测本机枚举表为空 → 恒 false，
+// 不得用作开设备门槛——开设备走 ReopenForTrack 的"试开即探测"）。
+bool AudioBackend::ExclusiveCapable(ma_uint32 rate) const {
+    if (exclusiveFormats_.empty()) return true;  // 枚举表空 = 未知，交给试开判定
+    for (const auto& [r, bits] : exclusiveFormats_) {
+        (void)bits;
+        if (r == rate) return true;
+    }
+    return false;
+}
+
+// 设备打开内核（context 必须已存在）。exclusive：s32 容器 @ 源率（位完美路，无混音器）；
+// shared：混音格式 @ 混音率。bufferMs→periodSizeInMilliseconds（OutputPolicy 已钳好）。
+bool AudioBackend::OpenDeviceKind(bool exclusive, ma_uint32 rate, int bufferMs,
+                                  std::string& error) {
     ma_device_config config = ma_device_config_init(ma_device_type_playback);
-    config.playback.pDeviceID = nullptr;  // 默认端点
-    config.playback.format = mixFormat;   // 本实现输出链路固定按设备格式换算
-    config.playback.channels = mixChannels;
-    config.sampleRate = mixRate;
-    config.playback.shareMode = ma_share_mode_shared;  // M2 只走共享（任务书范围裁定）
-    config.periodSizeInMilliseconds = 10;
+    config.playback.pDeviceID = hasDeviceId_ ? &lastDeviceId_ : nullptr;
+    config.playback.channels = 2;
+    if (exclusive) {
+        config.playback.format = ma_format_s32;
+        config.sampleRate = rate;
+        config.playback.shareMode = ma_share_mode_exclusive;
+    } else {
+        config.playback.format = mixFormat_;
+        config.sampleRate = mixRate_;
+        config.playback.shareMode = ma_share_mode_shared;
+    }
+    config.periodSizeInMilliseconds =
+        static_cast<ma_uint32>(std::max<std::int64_t>(1, bufferMs / 2));  // periods=2
     config.periods = 2;
     config.dataCallback = &AudioBackend::StaticCallback;
     config.pUserData = this;
 
     if (ma_device_init(&context_, &config, &device_) != MA_SUCCESS) {
-        ma_context_uninit(&context_);
-        error = "ma_device_init failed (no default render endpoint?)";
+        error = exclusive ? "exclusive ma_device_init failed" : "shared ma_device_init failed";
         return false;
     }
-
     deviceFacts_.opened = true;
+    deviceFacts_.exclusive = exclusive;
     deviceFacts_.appFormat = device_.playback.format;
     deviceFacts_.appRate = device_.sampleRate;
     deviceFacts_.appChannels = device_.playback.channels;
@@ -243,6 +284,63 @@ bool AudioBackend::OpenDevice(std::string& error) {
     popScratch_.assign(static_cast<std::size_t>(deviceFacts_.periodFrames) * 2 + 4096 * 2, 0);
     deviceOpen_.store(true, std::memory_order_release);
     return true;
+}
+
+void AudioBackend::CloseDeviceOnly() {
+    StopDeviceIfStarted();
+    if (deviceOpen_.load(std::memory_order_acquire)) {
+        ma_device_uninit(&device_);
+        deviceOpen_.store(false, std::memory_order_release);
+        deviceFacts_.opened = false;
+        deviceFacts_.exclusive = false;
+    }
+}
+
+// M4-a 核心：播放期按源格式重开设备（独占/换率/降级）。调用方保证安全点（设备已停、
+// 解码已静默）。成功→facts_/decoder 输出率对齐；失败→降级共享（保出声优先）。
+bool AudioBackend::ReopenForTrack(ma_uint32 srcRate, std::string& why) {
+    const OutputMode requested = policy_.requested();
+    // 完整关闭（stop+uninit）：OpenDeviceKind 会对同一 device_ 二次 init，
+    // 只 stop 不 uninit 是句柄泄漏（自查修正）。调用方已保证安全点（解码静默）。
+    CloseDeviceOnly();
+    // 协商：auto/exclusive 先试独占（s32@源率），失败降级共享。
+    // 试开即探测（M4-a 实测修正）：miniaudio 的 WASAPI 枚举表 nativeDataFormats 在本机
+    // 三端点全为 0 条（ma_context_get_device_info 需 IAudioClient 才填，vendor 枚举路径
+    // 未走），ExclusiveCapable 预探测永假；而实际 ma_device_init(EXCLUSIVE) 多格式全成功
+    // （tools/excl-probe 实测：s32@44.1/48/96k、s16@44.1k 均 init=0）。调用方已保证
+    // 安全点（设备停+解码静默），试开无副作用风险——失败即降级，正是 §7.2 降级链。
+    bool openedExclusive = false;
+    const bool tryExclusive = requested != OutputMode::Shared;
+    if (tryExclusive) {
+        std::string err;
+        if (OpenDeviceKind(/*exclusive=*/true, srcRate, policy_.bufferMs(), err)) {
+            openedExclusive = true;
+            why = "exclusive";
+        } else {
+            CloseDeviceOnly();  // 半开状态清理（init 失败本身不占句柄，防御性）
+            policy_.NoteDegrade(err);
+        }
+    }
+    if (!openedExclusive) {
+        std::string err;
+        if (!OpenDeviceKind(/*exclusive=*/false, mixRate_, policy_.bufferMs(), err)) {
+            CloseDeviceOnly();
+            why = err;
+            return false;
+        }
+        why = tryExclusive ? "degraded to shared" : "shared";
+    }
+    return true;
+}
+
+// M4-b：underrun 升档后的同参数重开（只换 buffer）。
+bool AudioBackend::ReopenBuffer(int bufferMs) {
+    const bool excl = deviceFacts_.exclusive;
+    const ma_uint32 rate = excl ? deviceFacts_.appRate : mixRate_;
+    StopDeviceIfStarted();
+    CloseDeviceOnly();
+    std::string err;
+    return OpenDeviceKind(excl, rate, bufferMs, err);
 }
 
 void AudioBackend::StopDeviceIfStarted() {
@@ -258,6 +356,7 @@ void AudioBackend::CloseDevice() {
     ma_context_uninit(&context_);
     deviceOpen_.store(false, std::memory_order_release);
     deviceFacts_.opened = false;
+    deviceFacts_.exclusive = false;
 }
 
 void AudioBackend::StaticCallback(ma_device* device, void* pOutput, const void* /*pInput*/,
@@ -268,7 +367,38 @@ void AudioBackend::StaticCallback(ma_device* device, void* pOutput, const void* 
 }
 
 // 音频回调：零分配、零锁、零 IO；只读 ring + 原子计数 + 增益乘法。
+// M4 独占分支：设备格式 s32 → 直写 int32（fixed 音量 = 纯 memcpy 位完美；
+// 软件增益时整型域乘 gain 再四舍五入，如实记 float-volume 因子——见 Negotiated）。
 void AudioBackend::Callback(void* pOutput, ma_uint32 frameCount) {
+    if (deviceFacts_.exclusive) {
+        auto* outS = static_cast<ma_int32*>(pOutput);
+        const std::size_t wantS = frameCount;
+        std::int32_t* scratchS = popScratch_.data();
+        const std::size_t gotS =
+            wantS <= popScratch_.size() / 2 ? RingPop(scratchS, wantS) : 0;
+        if (gotS < wantS && primed_.load(std::memory_order_relaxed) &&
+            !feedPaused_.load(std::memory_order_relaxed)) {
+            underrunCount_.fetch_add(1, std::memory_order_relaxed);
+        }
+        firedFrames_.fetch_add(wantS, std::memory_order_relaxed);
+        if (gotS > 0) {
+            playedFrames_.fetch_add(gotS, std::memory_order_acq_rel);
+            spectrum_.PushFromCallback(scratchS, gotS, deviceFacts_.appRate);
+        }
+        const float gainS = softwareGain_.load(std::memory_order_relaxed);
+        if (gainS >= 0.999999f) {
+            std::memcpy(outS, scratchS, gotS * 2 * sizeof(std::int32_t));  // 位完美直通
+        } else {
+            for (std::size_t i = 0; i < gotS * 2; ++i) {
+                outS[i] = static_cast<std::int32_t>(
+                    static_cast<double>(scratchS[i]) * gainS);
+            }
+        }
+        for (std::size_t i = gotS * 2; i < wantS * 2; ++i) {
+            outS[i] = 0;  // 欠载/EOF 补静音
+        }
+        return;
+    }
     auto* out = static_cast<float*>(pOutput);
     const std::size_t want = frameCount;
     std::int32_t* scratch = popScratch_.data();
@@ -351,7 +481,17 @@ bool AudioBackend::OpenTrack(const std::string& utf8Path, std::string& error) {
         return false;
     }
 
-    // 第 2 步：主解码器 = s32 整型容器（24bit 红线）× 2ch × 设备速率（不等则记 resample 因子）。
+    // 第 2 步（M4）：独占能力允许时按源率重开设备（位完美路，无混音器无重采样）；
+    // 失败自动降级共享（保出声优先）。CloseTrack 已制造安全点（设备停 + 解码静默）。
+    std::string why;
+    if (!ReopenForTrack(srcRate, why) && !deviceOpen_.load(std::memory_order_acquire)) {
+        // 连共享都开不了：设备彻底不可用，按 decode_failed 上抛。
+        error = "no device: " + why;
+        return false;
+    }
+
+    // 主解码器 = s32 整型容器（24bit 红线）× 2ch × 设备速率（不等则记 resample 因子）。
+    // 独占时 appRate == srcRate → 天然直通；共享时按混音率（重采样因子如实）。
     const ma_uint32 outChannels = 2;
     const ma_uint32 outRate = deviceFacts_.appRate != 0 ? deviceFacts_.appRate : srcRate;
     ma_decoder_config config = ma_decoder_config_init(ma_format_s32, outChannels, outRate);
@@ -604,7 +744,7 @@ proto::Json AudioBackend::Negotiated() const {
     chain.push_back({{"node", "resample"}, {"passthrough", !resampled}});
     chain.push_back({{"node", "volume"}, {"mode", volumeMode_}, {"passthrough", volumePassthrough}});
 
-    const std::string fidelity = [&] {
+    std::string fidelity = [&] {
         // §13：bit-perfect 前提是独占流 → 共享模式恒非 bit-perfect（红线如实上报）。
         // 链路直通（无重采样/无通道适配/100% 音量）= app-perfect；任一激活 = processed。
         // 源 float 解码（MP3）不降级到 processed，但明列 float-decode 因子（§13 APP-PERFECT 定义）。
@@ -632,12 +772,30 @@ proto::Json AudioBackend::Negotiated() const {
     const ma_uint32 rate = deviceFacts_.appRate != 0 ? deviceFacts_.appRate : 48000;
     const std::int64_t periodMs =
         static_cast<std::int64_t>(deviceFacts_.periodFrames) * 1000 / rate;
-    return proto::Json{{"share", "shared-event"},
+    // M4：独占事实进 share/factors/fidelity（§13 bit-perfect 的唯一前提）。
+    // 独占下无 shared-mixer 因子；fidelity 判定：整型容器 ∧ 因子全空 = bit-perfect，
+    // 有因子 = processed（任何处理都破坏位完美，与共享口径区分开）。
+    const bool excl = deviceFacts_.exclusive;
+    if (excl) {
+        factors = proto::Json::array();
+        if (sourceFloat) factors.push_back("float-decode");
+        if (resampled) factors.push_back("resample");
+        if (channelAdapt) factors.push_back("channel-adapt");
+        if (!volumePassthrough) {
+            factors.push_back(hwPath ? std::string("hardware-volume")
+                                     : std::string("float-volume"));
+        }
+        if (volumeMode_ == "integer") factors.push_back("integer-volume");
+        fidelity = (factors.empty() && deviceFacts_.appFormat == ma_format_s32)
+                       ? "bit-perfect"
+                       : (factors.empty() ? "app-perfect" : "processed");
+    }
+    return proto::Json{{"share", excl ? "exclusive" : "shared-event"},
                        {"backend", "wasapi"},
                        {"format", std::move(format)},
                        {"buffer_ms", periodMs * (deviceFacts_.periods != 0 ? deviceFacts_.periods : 2)},
                        {"period_ms", periodMs},
-                       {"auto_expanded", false},
+                       {"auto_expanded", policy_.current().autoExpanded},
                        {"chain", std::move(chain)},
                        {"fidelity", fidelity},
                        {"factors", std::move(factors)}};
@@ -673,6 +831,50 @@ std::int64_t AudioBackend::BufferMsNow() {
 // 共享枚举面：ma_context_get_devices 会重新枚举并持 deviceEnumLock（miniaudio 内部串行，
 // 仅会话线程调用），结果缓存在 context 内。返回 null = 无可用 context（设备未开），
 // 调用方按 §5 回 not_implemented（不得拿空数组假装有设备）。
+// devices.list 的 exclusive 三态（见调用点注释 ①②③）。
+proto::Json AudioBackend::DeviceExclusiveJson(const ma_device_info& info, ma_uint32 formatCap) {
+    const bool isOpen = info.isDefault && deviceOpen_.load(std::memory_order_relaxed);
+    if (isOpen && deviceFacts_.exclusive) {
+        proto::Json bitsArr = proto::Json::array();
+        bitsArr.push_back(static_cast<int>(FormatBits(deviceFacts_.appFormat)));
+        proto::Json one = proto::Json::array();
+        one.push_back({{"rate", deviceFacts_.appRate}, {"bits", std::move(bitsArr)}});
+        return proto::Json{{"supported", true}, {"rates", std::move(one)}};
+    }
+    proto::Json agg = ExclusiveCapabilityJson(info, formatCap);
+    if (agg["rates"].empty()) return proto::Json(nullptr);  // 未知态（本机常态）
+    return agg;
+}
+
+// M4-a：单设备独占能力聚合（{supported, rates:[{rate,bits_container}]}，rate 升序去重）。
+proto::Json AudioBackend::ExclusiveCapabilityJson(const ma_device_info& info,
+                                                  ma_uint32 formatCap) {
+    std::vector<std::pair<ma_uint32, ma_uint32>> excl;  // (rate, bitsContainer)
+    for (ma_uint32 f = 0; f < info.nativeDataFormatCount && f < formatCap; ++f) {
+        const auto& df = info.nativeDataFormats[f];
+        if (df.sampleRate == 0 || (df.channels != 0 && df.channels != 2)) continue;
+        const bool integer = df.format == ma_format_s16 || df.format == ma_format_s32;
+        if (!integer || (df.flags & MA_DATA_FORMAT_FLAG_EXCLUSIVE_MODE) == 0) continue;
+        excl.emplace_back(df.sampleRate,
+                          static_cast<ma_uint32>(df.format == ma_format_s16 ? 16 : 32));
+    }
+    std::sort(excl.begin(), excl.end());
+    proto::Json rates = proto::Json::array();
+    for (const auto& [rate, bits] : excl) {
+        if (!rates.empty() && rates.back()["rate"] == rate) {
+            const bool has = std::any_of(
+                rates.back()["bits"].begin(), rates.back()["bits"].end(),
+                [&](const proto::Json& b) { return b == bits; });
+            if (!has) rates.back()["bits"].push_back(bits);
+            continue;
+        }
+        proto::Json bitsArr = proto::Json::array();
+        bitsArr.push_back(bits);
+        rates.push_back({{"rate", rate}, {"bits", std::move(bitsArr)}});
+    }
+    return proto::Json{{"supported", !excl.empty()}, {"rates", std::move(rates)}};
+}
+
 proto::Json AudioBackend::ListDevices() {
     if (!deviceOpen_.load(std::memory_order_acquire)) return proto::Json(nullptr);
 
@@ -758,8 +960,12 @@ proto::Json AudioBackend::ListDevices() {
                                         {"min_period_ms", minPeriodMs == 0 ? proto::Json(nullptr)
                                                                            : proto::Json(minPeriodMs)},
                                         {"mix_format", std::move(mixFormat)},
-                                        // M4 域：独占能力未探测（v1.5 只读面明写 null）。
-                                        {"exclusive", proto::Json(nullptr)}}}});
+                                        // M4-a（协议 v1.6）：exclusive 能力三态——
+                                        // ① 当前已开设备：报实况（share==exclusive 即支持+当前档）；
+                                        // ② 枚举表有 EXCLUSIVE 条目：报探测表；
+                                        // ③ 其余 = null（未知，miniaudio 枚举表本机为空，
+                                        //    真判定在 output.mode 试开；不假称支持/不支持）。
+                                        {"exclusive", DeviceExclusiveJson(info, kFormatCap)}}}});
     }
     return devices;
 }

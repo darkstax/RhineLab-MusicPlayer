@@ -47,6 +47,7 @@ internal static class Program
         // M6（协议 v1.5）：只读面——假设备矩阵 + 零值诊断（字段形状与真核心逐字一致）。
         "devices.list",
         "diag.get",
+        "output.mode",
     ];
 
     private static readonly CancellationTokenSource Shutdown = new();
@@ -592,9 +593,27 @@ internal static class Program
             // 非当前设备 mix_format/min_period_ms 同样 null（真核心同口径）。
             case "devices.list":
                 return (new Dictionary<string, object?> { ["devices"] = FakeDeviceMatrix() }, []);
-            // M3/M4 能力先占名（§5）：一律 not_implemented，不得静默丢弃。
-            case "devices.select" or "output.mode":
-                throw new EngineNotImplemented($"cmd '{cmd}' is not implemented before M4");
+            // M4-a（协议 v1.6）：假协商——参数校验与钳制同真核心；结果注入 FakeNegotiated
+            // 使后续 state 快照携带（前端徽章/信号路径图可演示 exclusive 态）。
+            // devices.select 属 M4-c：维持 not_implemented。
+            case "devices.select":
+                throw new EngineNotImplemented($"cmd '{cmd}' is not implemented before M4-c");
+            case "output.mode":
+            {
+                var mode = Str(data!, "mode") ?? "";
+                if (mode is not ("shared" or "exclusive" or "auto"))
+                    throw new EngineBadRequest(
+                        $"output.mode requires shared/exclusive/auto, got '{mode}'");
+                var bufferMs = ClampLong(Num(data!, "buffer_ms") ?? 10, 1, 30000);
+                // auto_expand_buffer 是 bool：SafeBool 语义（非布尔视为缺省 true）。
+                var autoExpand = Bool(data!, "auto_expand_buffer") ?? true;
+                var bufferMax = ClampLong(Num(data!, "buffer_max_ms") ?? 300, 5, 30000);
+                var excl = mode == "exclusive";  // 桩无真设备：auto 如实报 shared（降级口径）
+                FakeEngine.FakeNegotiated = FakeNegotiatedFor(excl, bufferMs, bufferMax, autoExpand);
+                FakeEngine.FakeBadges = BadgesFor(FakeEngine.FakeNegotiated);
+                return (new Dictionary<string, object?> { ["negotiated"] = FakeEngine.FakeNegotiated },
+                        [new EngineEvent("state", Engine.Snapshot())]);
+            }
             case "engine.preload" or "engine.cancel_preload" or "engine.queue" or "config.get" or "config.set"
                 or "library.scan" or "library.query" or "taskbar.set":
                 throw new EngineNotImplemented($"cmd '{cmd}' is not implemented by this M1 stub");
@@ -643,7 +662,18 @@ internal static class Program
                 ["rate"] = 384000L, ["bits_container"] = 32L, ["bits_valid"] = 32L,
                 ["encoding"] = "pcm-float", ["channels"] = 2L,
             },
-            ["exclusive"] = null,
+            // v1.6：独占能力真形状（§23 实测：DAC 16/24bit @44.1k–384k 全通过；
+            // bits = 容器位宽（i24-in-i32 → 32 容器 + 16/24 有效档，桩按探测口径报 16/32）。
+            ["exclusive"] = new Dictionary<string, object?>
+            {
+                ["supported"] = true,
+                ["rates"] = new List<object?>
+                {
+                    ExclRate(44100L, 16, 32), ExclRate(48000L, 16, 32), ExclRate(88200L, 16, 32),
+                    ExclRate(96000L, 16, 32), ExclRate(176400L, 16, 32), ExclRate(192000L, 16, 32),
+                    ExclRate(352800L, 16, 32), ExclRate(384000L, 16, 32),
+                },
+            },
         };
         return new List<object?>
         {
@@ -673,7 +703,16 @@ internal static class Program
                     },
                     ["min_period_ms"] = null,
                     ["mix_format"] = null,
-                    ["exclusive"] = null,
+                    ["exclusive"] = new Dictionary<string, object?>
+                    {
+                        ["supported"] = true,  // §23：Realtek 16/24bit @44.1k–192k
+                        ["rates"] = new List<object?>
+                        {
+                            ExclRate(44100L, 16, 32), ExclRate(48000L, 16, 32), ExclRate(88200L, 16, 32),
+                            ExclRate(96000L, 16, 32), ExclRate(176400L, 16, 32),
+                            ExclRate(192000L, 16, 32),
+                        },
+                    },
                 },
             },
             new Dictionary<string, object?>
@@ -690,11 +729,21 @@ internal static class Program
                     },
                     ["min_period_ms"] = null,
                     ["mix_format"] = null,
-                    ["exclusive"] = null,
+                    ["exclusive"] = new Dictionary<string, object?>
+                    {
+                        // §23 实测：虚拟设备独占仅 16bit——UI 据此在选它时明示位完美必挂。
+                        ["supported"] = true,
+                        ["rates"] = new List<object?> { ExclRate(48000L, 16) },
+                    },
                 },
             },
         };
     }
+
+    /// <summary>独占档（bits = 容器位宽集合，与真核心 ExclusiveCapabilityJson 聚出口径一致：
+    /// s16→16、s24-in-s32→32；§23 实测 DAC/Realtek 双档、Steam 仅 16bit）。</summary>
+    private static Dictionary<string, object?> ExclRate(long rate, params long[] bits) =>
+        new() { ["rate"] = rate, ["bits"] = bits.Select(b => (object?)b).ToList() };
 
     private static JsonObject Error(string? id, string code, string message, bool retryable)
     {
@@ -956,6 +1005,61 @@ internal static class Program
     private static string? IpcType(JsonObject frame) => SafeString(frame["t"]);
 
     private static string? Str(JsonObject? frame, string name) => frame is null ? null : SafeString(frame[name]);
+
+    private static bool? Bool(JsonObject? frame, string name)
+    {
+        if (frame is null) return null;
+        var node = frame[name];
+        if (node is null) return null;
+        try { return node.GetValue<bool>(); }
+        catch (InvalidOperationException) { return null; }
+    }
+
+    private static long ClampLong(double value, long lo, long hi) =>
+        Math.Clamp((long)value, lo, hi);
+
+    /// <summary>假 negotiated（§8 形状逐字）：exclusive 时整型容器 @48k 零因子 = bit-perfect；
+    /// shared 恒 app-perfect + shared-mixer（与真核心口径一致）。桩不建模重采样/音量降级。</summary>
+    private static Dictionary<string, object?> FakeNegotiatedFor(
+        bool exclusive, long bufferMs, long bufferMax, bool autoExpand) => new()
+        {
+            ["share"] = exclusive ? "exclusive" : "shared-event",
+            ["backend"] = "wasapi",
+            ["format"] = new Dictionary<string, object?>
+            {
+                ["rate"] = 48000L,
+                ["bits_container"] = exclusive ? 32L : 32L,
+                ["bits_valid"] = exclusive ? 24L : 32L,
+                ["encoding"] = exclusive ? "pcm" : "pcm-float",
+                ["channels"] = 2L,
+            },
+            ["buffer_ms"] = bufferMs * 2,
+            ["period_ms"] = bufferMs,
+            ["auto_expanded"] = autoExpand && bufferMs > 10,
+            ["chain"] = new List<object?>
+            {
+                new Dictionary<string, object?> { ["node"] = "decoder", ["detail"] = "flac s24->s32", ["passthrough"] = true },
+                new Dictionary<string, object?> { ["node"] = "resample", ["passthrough"] = true },
+                new Dictionary<string, object?> { ["node"] = "volume", ["mode"] = "fixed", ["passthrough"] = true },
+            },
+            ["fidelity"] = exclusive ? "bit-perfect" : "app-perfect",
+            ["factors"] = exclusive
+                ? new List<object?>()
+                : new List<object?> { "shared-mixer" },
+        };
+
+    private static Dictionary<string, object?> BadgesFor(Dictionary<string, object?>? negotiated)
+    {
+        var excl = negotiated?["share"] as string == "exclusive";
+        var fidelity = negotiated?["fidelity"] as string;
+        return new Dictionary<string, object?>
+        {
+            ["exclusive"] = excl,
+            ["bit_perfect"] = excl && fidelity == "bit-perfect",
+            ["app_perfect"] = !excl && fidelity == "app-perfect",
+            ["factors"] = negotiated?["factors"],
+        };
+    }
 
     private static double? Num(JsonObject? frame, string name)
     {

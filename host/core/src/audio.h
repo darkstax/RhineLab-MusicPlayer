@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "miniaudio.h"
+#include "output-policy.h"
 #include "protocol.h"
 #include "spectrum.h"
 
@@ -41,10 +42,11 @@ struct TrackFacts {
     bool outInteger = false;         // 解码输出容器是否整型（24bit 红线：本实现强制 s32）
 };
 
-// 共享模式设备事实（negotiated 的静态部分）。
+// 设备事实（negotiated 的静态部分）。M4：共享=f32@混音率；独占=s32 容器@源率（位完美路）。
 struct DeviceFacts {
     bool opened = false;
-    ma_format appFormat = ma_format_f32;  // 设备输出格式（本实现固定 f32）
+    bool exclusive = false;               // M4：当前设备是否独占流
+    ma_format appFormat = ma_format_f32;  // 共享固定 f32；独占固定 s32（容器，见下）
     std::uint32_t appRate = 0;
     std::uint32_t appChannels = 0;
     std::uint32_t periodFrames = 0;
@@ -59,11 +61,23 @@ public:
     AudioBackend(const AudioBackend&) = delete;
     AudioBackend& operator=(const AudioBackend&) = delete;
 
-    // ---- 设备（默认播放端点，共享模式）----
+    // ---- 设备（默认播放端点）。M2 共享；M4-a 起播放期可按源格式切独占。----
     bool OpenDevice(std::string& error);
     void CloseDevice();
     bool device_open() const { return deviceOpen_.load(std::memory_order_acquire); }
     const DeviceFacts& device_facts() const { return deviceFacts_; }
+    bool exclusive() const { return deviceFacts_.exclusive; }
+
+    // ---- M4 输出策略（协议 v1.6 output.mode；协商状态机在 OutputPolicy，纯逻辑单测）----
+    void ConfigureOutput(const OutputPolicyConfig& config) { policy_.UpdateConfig(config); }
+    OutputPolicy& policy() { return policy_; }
+    const OutputPolicy& policy() const { return policy_; }
+    // 独占能力探测（nativeDataFormats 的 EXCLUSIVE 位 + s32 容器纪律）。
+    bool ExclusiveCapable(ma_uint32 rate) const;
+    // 播放期设备重开（换率/换 share/换 buffer）：成功 true；失败内部降级共享。
+    bool ReopenForTrack(ma_uint32 srcRate, std::string& why);
+    // underrun 自动升档后重开（M4-b）：share/format/rate 不变，只换缓冲；成功 true。
+    bool ReopenBuffer(int bufferMs);
 
     // ---- 曲目 ----
     bool OpenTrack(const std::string& utf8Path, std::string& error);
@@ -135,6 +149,15 @@ private:
     void QuiesceFeed();
     void StopDeviceIfStarted();
 
+    // 设备打开内核（context 已存在）：exclusive→s32@rate；shared→混音格式。
+    bool CacheDefaultEndpoint();  // 枚举默认端点：name/mix 格式/独占能力表
+    static proto::Json ExclusiveCapabilityJson(const ma_device_info& info,
+                                               ma_uint32 formatCap);  // M4-a devices.list
+    proto::Json DeviceExclusiveJson(const ma_device_info& info,
+                                    ma_uint32 formatCap);  // 三态：实况/探测表/null(未知)
+    bool OpenDeviceKind(bool exclusive, ma_uint32 rate, int bufferMs, std::string& error);
+    void CloseDeviceOnly();  // 只 uninit device（context 保留）
+
     std::int64_t RestartMs(std::uint64_t startFrames, std::string& error) {
         std::int64_t elapsedMs = 0;
         RestartStream(startFrames, &elapsedMs, error);
@@ -190,6 +213,15 @@ private:
     std::vector<std::int32_t> popScratch_;
 
     SpectrumTap spectrum_;  // 预分配环形槽位；回调只 memcpy+atomic（红线 A1）
+
+    OutputPolicy policy_;   // M4 协商状态机（控制线程独占访问）
+    // 默认端点 id（缓存自首次枚举，重开时钉同一设备）。ma_device_id 是 union
+    // （WASAPI 用 wchar wasapi[64]），必须整结构体拷贝 + ma_device_id_equal 比较。
+    ma_device_id lastDeviceId_{};
+    bool hasDeviceId_ = false;
+    ma_uint32 mixRate_ = 48000; // 共享混音率（首次枚举缓存）
+    ma_format mixFormat_ = ma_format_f32;
+    std::vector<std::pair<ma_uint32, ma_uint32>> exclusiveFormats_;  // {rate, bitsContainer} 独占能力缓存
 
     std::vector<ma_int32> chunkS32_;  // 解码线程暂存（OpenTrack 分配，线程内复用）
     static constexpr ma_uint64 kChunkFrames = 1024;

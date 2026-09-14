@@ -13,7 +13,7 @@
        format 字段集 {rate,bits_container,bits_valid,encoding,channels}，chain 为数组。
     4) devices.list ack {devices:[...]}（真核心无设备时回 not_implemented——判定分支）：
        每台设备字段集恰为 {id,name,kind,default,capabilities}；capabilities 字段集恰为
-       {rates,min_period_ms,mix_format,exclusive}；exclusive 恒 null（M4 域）；
+       {rates,min_period_ms,mix_format,exclusive}；exclusive 三态（v1.6：null=未知/实况/探测表）；
        rates 元素 {rate,bits[]}；kind 恒 "playback"；恰一台 default=true。
     5) 播放后 diag.get：真核心 link 非 null、period_ms>0；桩 link=null（negotiated 豁免同口径）、
        buffer_ms_now 随合成 buffered 语义。
@@ -144,7 +144,9 @@ try {
     Assert-Keys $devices[0].capabilities @('rates', 'min_period_ms', 'mix_format', 'exclusive') 'devices[i].capabilities'
     foreach ($d in $devices) {
       if ($d.kind -ne 'playback') { Write-Host "  FAIL kind=$($d.kind)" -ForegroundColor Red; $script:Failures++ }
-      if ($null -ne $d.capabilities.exclusive) { Write-Host '  FAIL exclusive 非 null（M4 域）' -ForegroundColor Red; $script:Failures++ }
+      # v1.6：exclusive 三态——null=未知（枚举表空，试开判定）或 {supported,rates} 形状皆合法。
+      if ($null -ne $d.capabilities.exclusive -and -not ($d.capabilities.exclusive.PSObject.Properties.Name -contains 'supported')) {
+        Write-Host '  FAIL exclusive 非 null 但缺 supported 字段' -ForegroundColor Red; $script:Failures++ }
       foreach ($r in @($d.capabilities.rates)) {
         $rKeys = @($r.PSObject.Properties.Name) | Sort-Object
         if (($rKeys -join ',') -ne 'bits,rate') { Write-Host "  FAIL rates 元素键=$($rKeys -join ',')" -ForegroundColor Red; $script:Failures++ }
@@ -153,7 +155,7 @@ try {
     }
     $defaults = @($devices | Where-Object { $_.default })
     if ($defaults.Count -ne 1) { Write-Host "  FAIL default=true 台数=$($defaults.Count)" -ForegroundColor Red; $script:Failures++ }
-    else { Write-Host "  ok   devices=$($devices.Count) 台、default 唯一、exclusive 全 null" -ForegroundColor Green }
+    else { Write-Host "  ok   devices=$($devices.Count) 台、default 唯一、exclusive 三态合法（v1.6）" -ForegroundColor Green }
   }
 
   # 5) 播放后 diag.get（真核心 link 必须有设备事实）

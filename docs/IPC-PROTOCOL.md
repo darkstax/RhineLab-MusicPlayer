@@ -1,6 +1,6 @@
-# IPC 协议契约 v1.5（壳 ↔ 音频核心 ↔ 前端桥）
+# IPC 协议契约 v1.6（壳 ↔ 音频核心 ↔ 前端桥）
 
-> 状态：v1.5 修订 2026-09-14（M6 只读数据面）· 前版 v1.4（M5 library/lyric）· 配套 `AUDIO-ENGINE.md` §1/§10（D2 路线，见 `DECISION-Q1-HOST.md` §7.6）
+> 状态：v1.6 修订 2026-09-14（M4-a 独占面）· 前版 v1.5（M6 只读）· v1.4（M5）· 配套 `AUDIO-ENGINE.md` §1/§10（D2 路线，见 `DECISION-Q1-HOST.md` §7.6）
 > 本文件是三方（WPF 壳、C++ 核心、TS 前端桥）的**唯一消息格式权威**；改协议必须改本文并升 `proto`。
 
 ## 1. 拓扑与传输
@@ -82,10 +82,10 @@ M0-M6 增量启用；未实现的 cmd 必须回 `err{code:"not_implemented"}`，
 | `engine.preload` / `cancel_preload` | `{track_id}` | `{accepted:bool, reason?}` | M2 |
 | `engine.queue` | `{items:[track_id...], head:int}` | `{queue_rev:int}` | M2 |
 | `spectrum.on` / `spectrum.off` | —（无参数） | `{enabled:boolean}` | M3（v1.3 启用） |
-| `devices.list` | — | `{devices:[{id,name,kind,default,capabilities:{rates:[{rate,bits...}],min_period_ms,mix_format}}]}`（**v1.5 只读面**：枚举+共享能力；exclusive 能力字段 M4 域返回 null） | M6 |
+| `devices.list` | — | `{devices:[{id,name,kind,default,capabilities:{rates:[{rate,bits...}],min_period_ms,mix_format,exclusive:{supported:bool,rates:[{rate,bits[]}]}}}}]`（**v1.5 只读面 + v1.6 补 exclusive 真探测**：纯枚举读取，无 open 副作用） | M6 |
 | `library.quarantine` | `{limit?=100}` | `{items:[{path,reason,mtime,size,seen_at}]}`（v1.5，壳侧自答只读） | M6 |
 | `devices.select` | `{id, mode:auto/shared/exclusive}` | `{negotiated:{...}}`（§8） | M3 |
-| `output.mode` | `{mode, buffer_ms?, auto_expand_buffer?, buffer_max_ms?}` | `{negotiated}` | M4 |
+| `output.mode` | `{mode:"shared"\|"exclusive"\|"auto", buffer_ms?, auto_expand_buffer?, buffer_max_ms?}` | `{negotiated}`（重开结果实况；降级如实） | M4-a（v1.6 启用） |
 | `config.get` / `config.set` | `{path:"output.buffer_ms", value}` | `{value}`（生效值，可能被钳制） | M1 |
 | `library.scan` | `{roots?:[path], full?:bool}`（缺省=config 根；full=忽略 mtime 增量） | `{scanned,added,updated,removed,failed,elapsed_ms}` | M5（v1.4 定形；**壳侧自答**，不经核心） |
 | `library.query` | `{q?, scope?:"tracks"\|"albums", filter?:{genre?,year?,artist?,album?}, sort?:"title"\|"artist"\|"album"\|"year"\|"duration"\|"added", offset?=0, limit?=200}` | `{total, items:[TrackDto\|AlbumDto]}`（形状见 §5.1） | M5 v1.4 |
@@ -166,7 +166,7 @@ M0-M6 增量启用；未实现的 cmd 必须回 `err{code:"not_implemented"}`，
 
 ```json
 {
-  "share": "exclusive | shared-event",
+  "share": "exclusive | shared-event",   // M4-a 起 exclusive 可达；降级链实况见 timeline
   "backend": "wasapi | alsa-direct | null",
   "format": {"rate": 96000, "bits_container": 32, "bits_valid": 24, "encoding": "pcm", "channels": 2},
   "buffer_ms": 10, "period_ms": 3, "auto_expanded": false,

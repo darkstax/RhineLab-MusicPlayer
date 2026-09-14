@@ -39,6 +39,8 @@ const char* kCaps[] = {
     "engine.toggle", "engine.seek", "engine.volume", "spectrum",
     // M6（协议 v1.5）：只读数据面——设备枚举与诊断计数。
     "devices.list", "diag.get",
+    // M4-a（协议 v1.6）：输出策略（独占协商/降级/升档）。devices.select 属 M4-c 不声明。
+    "output.mode",
 };
 
 std::atomic<HANDLE> g_stopEvent{nullptr};
@@ -457,9 +459,20 @@ private:
                                       {"period_ms", periodMs == 0 ? Json(nullptr) : Json(periodMs)},
                                       {"link", audio_.Negotiated()},
                                       {"fallback_history", Json(nullptr)}};
-            } else if (cmd == "devices.select" || cmd == "output.mode") {
-                // M3/M4 域（任务书裁定 M4 排除；选择设备/切换输出模式涉独占协商）。
-                throw rhine::NotImplemented{"cmd '" + cmd + "' is not implemented before M4"};
+            } else if (cmd == "output.mode") {
+                // M4-a（协议 v1.6）：输出策略 + 立即重开链（engine 层完整重建）。
+                const auto mode = rhine::proto::SafeString(data, "mode");
+                if (!mode.has_value()) {
+                    throw rhine::BadRequest{
+                        "output.mode requires string mode (shared/exclusive/auto)"};
+                }
+                outcome = engine_.SetOutputMode(
+                    *mode, rhine::proto::SafeDouble(data, "buffer_ms"),
+                    rhine::proto::SafeBool(data, "auto_expand_buffer"),
+                    rhine::proto::SafeDouble(data, "buffer_max_ms"));
+            } else if (cmd == "devices.select") {
+                // M4-c 域（设备手动切换 + 热插拔监听），本批未启用。
+                throw rhine::NotImplemented{"cmd '" + cmd + "' is not implemented before M4-c"};
             } else if (cmd == "echo") {
                 // 桩的 M0 遗留测试面不属于真核心（caps 未声明）。
                 throw rhine::NotImplemented{"cmd 'echo' is not implemented by this core"};

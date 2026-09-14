@@ -53,6 +53,9 @@ public:
     CommandOutcome Toggle();
     CommandOutcome Seek(std::int64_t positionMs);
     CommandOutcome SetVolume(const std::string& mode, std::optional<double> value);
+    // M4-a（协议 v1.6 output.mode）：策略更新 + 有曲时立即重开设备（独占↔共享/换缓冲）。
+    CommandOutcome SetOutputMode(const std::string& mode, std::optional<double> bufferMs,
+                                 std::optional<bool> autoExpand, std::optional<double> bufferMaxMs);
     proto::Json Snapshot() const;  // engine.state 的 result（与 state 事件 payload 同构）
 
     // 会话 1Hz tick：任意状态发一帧 position；playing 且（播完或 EOF 排空）→ 自动 stopped。

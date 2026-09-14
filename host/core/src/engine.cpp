@@ -218,6 +218,72 @@ CommandOutcome Engine::Toggle() {
     return outcome;
 }
 
+CommandOutcome Engine::SetOutputMode(const std::string& mode, std::optional<double> bufferMs,
+                                     std::optional<bool> autoExpand,
+                                     std::optional<double> bufferMaxMs) {
+    // §5 v1.6：mode ∈ shared/exclusive/auto；参数越界钳制（同 seek 口径），非法字符串 bad_request。
+    OutputMode parsed;
+    if (mode == "shared") parsed = OutputMode::Shared;
+    else if (mode == "exclusive") parsed = OutputMode::Exclusive;
+    else if (mode == "auto") parsed = OutputMode::Auto;
+    else throw BadRequest{"output.mode requires shared/exclusive/auto, got '" + mode + "'"};
+
+    OutputPolicyConfig config = audio_.policy().config();
+    config.mode = parsed;
+    if (bufferMs.has_value()) {
+        long long v = static_cast<long long>(*bufferMs);
+        config.requestedBufferMs = static_cast<int>(v < 1 ? 1 : (v > 30000 ? 30000 : v));
+    }
+    if (autoExpand.has_value()) config.autoExpandBuffer = *autoExpand;
+    if (bufferMaxMs.has_value()) {
+        long long v = static_cast<long long>(*bufferMaxMs);
+        config.bufferMaxMs = static_cast<int>(v < 5 ? 5 : (v > 30000 ? 30000 : v));
+    }
+    audio_.ConfigureOutput(config);
+
+    CommandOutcome outcome;
+    // 有活动曲目 → 按新策略**完整重建**播放链：CloseTrack（停设备 + join 解码线程）→
+    // OpenTrack（内部 ReopenForTrack 按新 share 开设备，且 decoder 以**新** appRate 重建——
+    // 只重开设备不换 decoder 会让解码输出率与设备脱节，音高/位置全错位，自查修正）→
+    // 从冻结位置续播/续停。失败路径对齐 Play 的清理（idle + 清账本）。
+    if (!trackId_.empty() && state_ != State::Idle) {
+        const bool wasPlaying = state_ == State::Playing;
+        const std::int64_t frozenMs = PositionMs();
+        const std::string path = trackId_.substr(5);
+        const std::string keepTrack = trackId_;
+        audio_.CloseTrack();
+        std::string error;
+        if (!audio_.OpenTrack(path, error)) {
+            state_ = State::Idle;
+            trackId_.clear();
+            durationMs_ = 0;
+            lastPositionMs_ = 0;
+            throw DecodeFailure{error, proto::Json{{"track_id", keepTrack}}};
+        }
+        durationMs_ = FramesToMs(audio_.length_frames(), audio_.rate());
+        if (wasPlaying) {
+            std::int64_t elapsedMs = 0;
+            if (!audio_.RestartStream(MsToFrames(frozenMs, audio_.rate()), &elapsedMs, error)) {
+                state_ = State::Idle;
+                trackId_.clear();
+                durationMs_ = 0;
+                lastPositionMs_ = 0;
+                throw DecodeFailure{error, proto::Json{{"track_id", keepTrack}}};
+            }
+            state_ = State::Playing;
+        } else {
+            audio_.SeekFrozen(MsToFrames(frozenMs, audio_.rate()));
+            state_ = State::Paused;
+        }
+        lastPositionMs_ = frozenMs;
+    }
+    // §5 result = {negotiated}（协议 v1.6 表字面嵌套形状，与桩一致）；补发 state 帧
+    // （share 变了徽章要刷）。
+    outcome.result = proto::Json{{"negotiated", audio_.Negotiated()}};
+    AppendStatePosition(outcome);
+    return outcome;
+}
+
 CommandOutcome Engine::Seek(std::int64_t positionMs) {
     if (trackId_.empty() && !audio_.track_open()) {
         throw BadRequest{"engine.seek requires a loaded track"};
