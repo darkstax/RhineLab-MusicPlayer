@@ -1,0 +1,65 @@
+{
+ "checks": [
+  {
+   "name": "水合（records>40, columns>5）",
+   "ok": true,
+   "detail": {
+    "records": 339,
+    "columns": 11
+   }
+  },
+  {
+   "name": "选中卡封面 map 非 null",
+   "ok": true
+  },
+  {
+   "name": "设置含三态入口（纹理/仅选中卡/关闭）",
+   "ok": true,
+   "detail": {
+    "buttons": [
+     "纹理",
+     "仅选中卡",
+     "关闭"
+    ],
+    "pressed": [
+     "textures"
+    ],
+    "note": "选中卡展示曲库封面；自动降级仅在纹理泄漏/帧预算/GPU/通路故障时停用，改回任一档即恢复"
+   }
+  },
+  {
+   "name": "设置点关闭 → 素面 + userOff",
+   "ok": true,
+   "detail": {
+    "effective": "off",
+    "reason": "userOff",
+    "mapped": false,
+    "pressed": [
+     "off"
+    ]
+   }
+  },
+  {
+   "name": "强制降级 → 设置显示原因（纹理泄漏文案）",
+   "ok": true,
+   "detail": {
+    "note": "⚠ 纹理计数在 60 秒稳态观测中持续增长（缓存失效），封面已停用",
+    "effective": "off",
+    "reason": "textureLeak"
+   }
+  },
+  {
+   "name": "恢复 textures + config 持久化",
+   "ok": true,
+   "detail": {
+    "cfg": {
+     "value": "textures"
+    },
+    "effective": "textures",
+    "mapped": true
+   }
+  }
+ ],
+ "errors": [],
+ "allOk": true
+}

@@ -1,0 +1,88 @@
+{
+ "checks": [
+  {
+   "name": "找到小列样本（2..12 曲且有封面）",
+   "ok": true,
+   "detail": {
+    "genre": "Arknights",
+    "title": "火蓝之心原声带",
+    "artist": "塞壬唱片-MSR",
+    "trackCount": 3,
+    "year": 2019,
+    "formats": [
+     "MP3"
+    ],
+    "albumKey": "sha1:02573038ae57bfc71c2f8fbb3d351c613facf000"
+   }
+  },
+  {
+   "name": "浮层字段与 library.albums 一致",
+   "ok": true,
+   "detail": {
+    "ui": {
+     "genre": "Arknights",
+     "title": "火蓝之心原声带",
+     "artist": "塞壬唱片-MSR",
+     "trackCount": 3,
+     "year": 2019,
+     "formats": [
+      "MP3"
+     ],
+     "albumKey": "sha1:02573038ae57bfc71c2f8fbb3d351c613facf000"
+    },
+    "db": {
+     "title": "火蓝之心原声带",
+     "artist": "塞壬唱片-MSR",
+     "year": 2019,
+     "track_count": 3,
+     "formats": [
+      "MP3"
+     ],
+     "cover_key": "sha1:ead1589ca55de2838cd1e3493c9f8c743ce51b21"
+    }
+   }
+  },
+  {
+   "name": "DOM 浮层字段",
+   "ok": true,
+   "detail": {
+    "title": "火蓝之心原声带火蓝之心原声带火蓝之心原声带",
+    "sub": "塞壬唱片-MSR",
+    "meta": "2019／3 首曲目／6:23",
+    "badge": "MP3",
+    "mapped": true
+   }
+  },
+  {
+   "name": "选中卡封面 map 非 null",
+   "ok": true,
+   "detail": true
+  },
+  {
+   "name": "歌单行数 == track_count",
+   "ok": true,
+   "detail": {
+    "rows": 3,
+    "track_count": 3
+   }
+  },
+  {
+   "name": "点行 → lib:<id> playing（壳回显 lib: 前缀）",
+   "ok": true,
+   "detail": {
+    "id": "2135",
+    "core": {
+     "badges": null,
+     "duration_ms": 127000,
+     "negotiated": null,
+     "position_ms": 2212,
+     "state": "playing",
+     "track_id": "lib:2135",
+     "volume": 0.4
+    }
+   }
+  }
+ ],
+ "errors": [],
+ "allOk": true
+}

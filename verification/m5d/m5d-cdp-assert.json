@@ -1,0 +1,223 @@
+{
+ "mode": "assert",
+ "checks": [
+  {
+   "name": "library.stats",
+   "ok": true,
+   "detail": {
+    "albums": 344,
+    "genres": 13,
+    "last_scan_ms": 81,
+    "quarantine": 0,
+    "roots": [
+     "C:\\Users\\StarL\\Music"
+    ],
+    "tracks": 1116
+   }
+  },
+  {
+   "name": "wall.hydrated",
+   "ok": true,
+   "detail": {
+    "columns": 11,
+    "records": 339
+   }
+  },
+  {
+   "name": "列数=流派列数（动态）",
+   "ok": true,
+   "detail": 11
+  },
+  {
+   "name": "文案表 ALBUM/GENRE",
+   "ok": true,
+   "detail": {
+    "wall": {
+     "hydrated": true,
+     "columns": 11,
+     "records": 339,
+     "selected": {
+      "lane": 0,
+      "row": 12,
+      "slot": 12
+     },
+     "cover": {
+      "userMode": "textures",
+      "autoDegrading": false,
+      "reason": null,
+      "effective": "textures",
+      "ready": true,
+      "superPerformance": false,
+      "targetEdge": 512,
+      "budget": {
+       "maxTextures": 24,
+       "maxBytes": 100663296
+      },
+      "cache": {
+       "size": 3,
+       "bytes": 3145728,
+       "hits": 0,
+       "loads": 3,
+       "failures": 0,
+       "evictions": 0,
+       "gpuTextures": 3
+      },
+      "rendererTextures": 14,
+      "coverMapped": true,
+      "frameMedianMs": 7,
+      "controlMedianMs": null,
+      "maxTextureSize": 16384
+     }
+    },
+    "columnWord": "GENRE",
+    "columnTotal": "11",
+    "columnText": "GENRE 01 / 11",
+    "selectLabel": "ALBUM / SELECT",
+    "eyebrow": "MUSIC ARCHIVE",
+    "filePrefix": "ALBUM ",
+    "readLabel": "打开专辑",
+    "ticks": 290,
+    "calloutSub": "塞壬唱片-MSR",
+    "calloutSubHidden": false,
+    "calloutMeta": "2019／3 首曲目／6:23",
+    "badge": "MP3",
+    "badgeHidden": false,
+    "footerStats": "LOCAL COLLECTION · 344 ALBUMS / 1116 TRACKS",
+    "footerUserHidden": true,
+    "selectedTitle": "火蓝之心原声带火蓝之心原声带火蓝之心原声带",
+    "coverMapped": true,
+    "rendererTextures": 14
+   }
+  },
+  {
+   "name": "GENRE 01/N 格式",
+   "ok": true,
+   "detail": "GENRE 01 / 11"
+  },
+  {
+   "name": "浮层艺术家行+元数据行可见",
+   "ok": true,
+   "detail": {
+    "sub": "塞壬唱片-MSR",
+    "meta": "2019／3 首曲目／6:23"
+   }
+  },
+  {
+   "name": "格式角标",
+   "ok": true,
+   "detail": "MP3"
+  },
+  {
+   "name": "页脚 LOCAL COLLECTION 统计",
+   "ok": true,
+   "detail": "LOCAL COLLECTION · 344 ALBUMS / 1116 TRACKS"
+  },
+  {
+   "name": "选中卡封面 map 非 null（真曲库 cover_key）",
+   "ok": true,
+   "detail": {
+    "coverMapped": true,
+    "cacheSize": 3,
+    "targetEdge": 512
+   }
+  },
+  {
+   "name": "←/→ 切列且每列记忆恢复",
+   "ok": true,
+   "detail": {
+    "beforeLane": 0,
+    "midLane": 3,
+    "backLane": 0,
+    "beforeId": "A-001",
+    "backId": "A-001",
+    "columnTotal": "11"
+   }
+  },
+  {
+   "name": "八字段",
+   "ok": true,
+   "detail": [
+    "RELEASE",
+    "ARTIST",
+    "GENRE",
+    "VOLUMES",
+    "FORMAT",
+    "RESOLUTION",
+    "BITRATE",
+    "DURATION"
+   ]
+  },
+  {
+   "name": "页签 01 歌单 / 02 介绍",
+   "ok": true,
+   "detail": {
+    "dts": [
+     "RELEASE",
+     "ARTIST",
+     "GENRE",
+     "VOLUMES",
+     "FORMAT",
+     "RESOLUTION",
+     "BITRATE",
+     "DURATION"
+    ],
+    "ddEmpty": 0,
+    "tabs": [
+     "tracks",
+     "intro"
+    ],
+    "tabLabels": [
+     "01 歌单",
+     "02 专辑介绍"
+    ],
+    "trackRows": 3,
+    "viewerHidden": true,
+    "back": "返回专辑架",
+    "objectId": "ALBUM 001"
+   }
+  },
+  {
+   "name": "无空字段（null → —）",
+   "ok": true,
+   "detail": 0
+  },
+  {
+   "name": "360° 入口隐藏（无 GLTF 专辑模型，不许假称有）",
+   "ok": true,
+   "detail": true
+  },
+  {
+   "name": "返回文案 返回专辑架",
+   "ok": true,
+   "detail": "返回专辑架"
+  },
+  {
+   "name": "歌单渲染行数 > 0",
+   "ok": true,
+   "detail": 3
+  },
+  {
+   "name": "点歌单行 → lib:<id> 播放且状态推进",
+   "ok": true,
+   "detail": {
+    "clicked": true,
+    "trackId": "2135",
+    "player": {
+     "trackId": "lib:2135",
+     "state": "playing"
+    },
+    "core": {
+     "badges": null,
+     "duration_ms": 127000,
+     "negotiated": null,
+     "position_ms": 2510,
+     "state": "playing",
+     "track_id": "lib:2135",
+     "volume": 0.4
+    }
+   }
+  }
+ ],
+ "errors": [],
+ "allOk": true
+}

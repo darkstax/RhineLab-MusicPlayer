@@ -1,0 +1,45 @@
+{
+ "phase": "switches",
+ "data": {
+  "modes": [
+   {
+    "mode": "selected",
+    "effective": "selected",
+    "userMode": "selected",
+    "coverMapped": true,
+    "cached": 18
+   },
+   {
+    "mode": "off",
+    "effective": "off",
+    "userMode": "off",
+    "coverMapped": false,
+    "cached": 18
+   },
+   {
+    "mode": "textures",
+    "effective": "textures",
+    "userMode": "textures",
+    "coverMapped": true,
+    "cached": 18
+   }
+  ],
+  "forced": {
+   "effective": "off",
+   "reason": "textureLeak"
+  },
+  "manualRecover": {
+   "effective": "textures",
+   "autoDegrading": false
+  },
+  "persisted": {
+   "value": "off"
+  },
+  "offCoverMapped": false,
+  "budget": {
+   "maxTextures": 24,
+   "maxBytes": 100663296
+  }
+ },
+ "errors": []
+}

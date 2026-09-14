@@ -1,0 +1,203 @@
+{
+ "phase": "steady",
+ "data": {
+  "frameMedian": {
+   "on": {
+    "label": "on",
+    "medianMs": 27.950000000004366,
+    "samples": 110
+   },
+   "off": {
+    "label": "off",
+    "medianMs": 34.799999999995634,
+    "samples": 108
+   }
+  },
+  "steady": {
+   "samples": 60,
+   "firstTex": 28,
+   "lastTex": 33,
+   "maxTex": 35,
+   "minTex": 28,
+   "cacheMax": 24,
+   "lruCap24Held": true,
+   "growth": 5,
+   "series": [
+    28,
+    28,
+    28,
+    28,
+    28,
+    28,
+    30,
+    30,
+    29,
+    29,
+    29,
+    29,
+    29,
+    29,
+    29,
+    29,
+    32,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    34,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    33,
+    31,
+    31,
+    31,
+    31,
+    31,
+    31,
+    31,
+    31,
+    31,
+    34,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    35,
+    34,
+    33,
+    33
+   ],
+   "tail": [
+    {
+     "t": 48,
+     "tex": 32,
+     "cache": 24,
+     "bytes": 25149504,
+     "mapped": true
+    },
+    {
+     "t": 49,
+     "tex": 32,
+     "cache": 24,
+     "bytes": 25149504,
+     "mapped": true
+    },
+    {
+     "t": 50,
+     "tex": 32,
+     "cache": 24,
+     "bytes": 25149504,
+     "mapped": true
+    },
+    {
+     "t": 51,
+     "tex": 32,
+     "cache": 24,
+     "bytes": 25149504,
+     "mapped": true
+    },
+    {
+     "t": 52,
+     "tex": 32,
+     "cache": 24,
+     "bytes": 25149504,
+     "mapped": true
+    },
+    {
+     "t": 53,
+     "tex": 32,
+     "cache": 24,
+     "bytes": 25149504,
+     "mapped": true
+    },
+    {
+     "t": 54,
+     "tex": 32,
+     "cache": 24,
+     "bytes": 25149504,
+     "mapped": true
+    },
+    {
+     "t": 55,
+     "tex": 32,
+     "cache": 24,
+     "bytes": 25149504,
+     "mapped": true
+    },
+    {
+     "t": 56,
+     "tex": 35,
+     "cache": 24,
+     "bytes": 24660432,
+     "mapped": true
+    },
+    {
+     "t": 57,
+     "tex": 34,
+     "cache": 24,
+     "bytes": 24660432,
+     "mapped": true
+    },
+    {
+     "t": 58,
+     "tex": 33,
+     "cache": 24,
+     "bytes": 24660432,
+     "mapped": true
+    },
+    {
+     "t": 59,
+     "tex": 33,
+     "cache": 24,
+     "bytes": 24660432,
+     "mapped": true
+    }
+   ]
+  },
+  "snapshotFinal": {
+   "userMode": "textures",
+   "autoDegrading": false,
+   "reason": null,
+   "effective": "textures",
+   "ready": true,
+   "superPerformance": false,
+   "targetEdge": 512,
+   "budget": {
+    "maxTextures": 24,
+    "maxBytes": 100663296
+   },
+   "cache": {
+    "size": 24,
+    "bytes": 24660432,
+    "hits": 54,
+    "loads": 53,
+    "failures": 0,
+    "evictions": 29,
+    "gpuTextures": 24
+   },
+   "rendererTextures": 33,
+   "coverMapped": true,
+   "frameMedianMs": 27.89999999999418,
+   "controlMedianMs": 34.799999999995634,
+   "maxTextureSize": 16384
+  }
+ },
+ "errors": []
+}
