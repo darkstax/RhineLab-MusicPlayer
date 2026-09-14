@@ -104,7 +104,19 @@ public:
     proto::Json Negotiated() const;
     proto::Json Badges() const;
 
+    // ---- M6 只读面（协议 v1.5）----
+    // devices.list：共享枚举面——miniaudio 缓存的端点清单（id = MMDevice.ID 串、
+    // nativeDataFormats 聚合成 rates）；exclusive 能力字段属 M4 域，固定 null；
+    // min_period_ms 只对当前已开设备（默认端点）报真实协商周期，其余 null（不假数据）。
+    // 无可用 context（设备未开）时返回 null，由 main.cpp 按 §5 回 not_implemented。
+    proto::Json ListDevices();
+    // diag.get.buffer_ms_now：ring 当前可读帧 → ms（设备时钟口径，与 position.buffered_ms 同源）。
+    std::int64_t BufferMsNow();
+
     std::uint64_t underruns() const { return underrunCount_.load(std::memory_order_relaxed); }
+    // 重开流次数（协议 v1.5 diag.get.reopens：RestartStream 成功计数；Freeze/Resume 短重建
+    // 不计——那是暂停/继续语义，不是采样率切换重开）。
+    std::uint64_t reopens() const { return reopenCount_.load(std::memory_order_relaxed); }
 
     // ---- 频谱 tap（M3）：只读分接，回调侧零分配；订阅开关/事件由会话线程操作 ----
     SpectrumTap& spectrum() { return spectrum_; }
@@ -167,6 +179,7 @@ private:
     std::atomic<std::uint64_t> anchorFrames_{0};
     std::atomic<std::uint64_t> anchorPlayed_{0};
     std::atomic<std::uint64_t> underrunCount_{0};
+    std::atomic<std::uint64_t> reopenCount_{0};  // M6 diag.get（协议 v1.5）
 
     std::atomic<float> softwareGain_{1.0f};
     std::string volumeMode_{"float"};  // 仅控制线程读写（engine 会话线程）

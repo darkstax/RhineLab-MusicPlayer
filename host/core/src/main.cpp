@@ -37,6 +37,8 @@ constexpr int kProto = 1;
 const char* kCaps[] = {
     "engine.state", "engine.play", "engine.pause",  "engine.resume", "engine.stop",
     "engine.toggle", "engine.seek", "engine.volume", "spectrum",
+    // M6（协议 v1.5）：只读数据面——设备枚举与诊断计数。
+    "devices.list", "diag.get",
 };
 
 std::atomic<HANDLE> g_stopEvent{nullptr};
@@ -429,10 +431,35 @@ private:
                 if (on && !audio_.spectrum().enabled()) audio_.spectrum().Reset();
                 audio_.spectrum().SetEnabled(on);
                 outcome.result = Json{{"enabled", on}};
-            } else if (cmd == "devices.list" || cmd == "devices.select" || cmd == "output.mode" ||
-                       cmd == "diag.get") {
-                // M3/M4 域（任务书裁定 M4 排除；devices/diag 属 M3+）。
-                throw rhine::NotImplemented{"cmd '" + cmd + "' is not implemented before M3/M4"};
+            } else if (cmd == "devices.list") {
+                // 协议 v1.5（M6）只读面：枚举 + 共享能力；exclusive 能力字段 = null（M4 域）。
+                // 无设备/context 时返回 null → 按 §5 回 not_implemented，不得假装有设备。
+                Json devices = audio_.ListDevices();
+                if (devices.is_null()) {
+                    throw rhine::NotImplemented{
+                        "cmd 'devices.list' is unavailable (no audio context/device opened)"};
+                }
+                outcome.result = Json{{"devices", std::move(devices)}};
+            } else if (cmd == "diag.get") {
+                // 协议 v1.5（M6）只读面：计数器均为现成账本（audio.h underruns/reopens）；
+                // link = 当前协商事实（同 §8 结构，设备未开时为 null，与 state 快照同口径）；
+                // fallback_history 属 M4 降级链域，显式 null（不得省略、不得假数据）。
+                const std::int64_t periodMs =
+                    audio_.device_facts().appRate != 0
+                        ? std::max<std::int64_t>(
+                              1, static_cast<std::int64_t>(audio_.device_facts().periodFrames) *
+                                     1000 /
+                                     static_cast<std::int64_t>(audio_.device_facts().appRate))
+                        : 0;
+                outcome.result = Json{{"underruns", audio_.underruns()},
+                                      {"reopens", audio_.reopens()},
+                                      {"buffer_ms_now", audio_.BufferMsNow()},
+                                      {"period_ms", periodMs == 0 ? Json(nullptr) : Json(periodMs)},
+                                      {"link", audio_.Negotiated()},
+                                      {"fallback_history", Json(nullptr)}};
+            } else if (cmd == "devices.select" || cmd == "output.mode") {
+                // M3/M4 域（任务书裁定 M4 排除；选择设备/切换输出模式涉独占协商）。
+                throw rhine::NotImplemented{"cmd '" + cmd + "' is not implemented before M4"};
             } else if (cmd == "echo") {
                 // 桩的 M0 遗留测试面不属于真核心（caps 未声明）。
                 throw rhine::NotImplemented{"cmd 'echo' is not implemented by this core"};

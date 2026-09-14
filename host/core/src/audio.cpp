@@ -106,6 +106,15 @@ std::string ProbeSourceNativeFormat(const std::string& utf8Path) {
     return {};
 }
 
+std::string WideToUtf8Local(const wchar_t* wide) {
+    if (wide == nullptr || *wide == 0) return {};
+    const int need = WideCharToMultiByte(CP_UTF8, 0, wide, -1, nullptr, 0, nullptr, nullptr);
+    if (need <= 1) return {};
+    std::string out(static_cast<std::size_t>(need) - 1, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wide, -1, out.data(), need - 1, nullptr, nullptr);
+    return out;
+}
+
 constexpr double kFullScale = 2147483648.0;  // 2^31：s32 → [-1,1)
 
 }  // namespace
@@ -437,6 +446,8 @@ bool AudioBackend::RestartStream(std::uint64_t startFrames, std::int64_t* elapse
         return false;
     }
     deviceStarted_.store(true, std::memory_order_release);
+    // M6 diag.get（协议 v1.5）：重开流成功计数（采样率切换/play 重建类，任务书§2-1）。
+    reopenCount_.fetch_add(1, std::memory_order_relaxed);
     if (elapsedMsOut != nullptr) *elapsedMsOut = SteadyMs() - t0;
     return true;
 }
@@ -648,5 +659,110 @@ proto::Json AudioBackend::Badges() const {
                        {"app_perfect", fidelity == "app-perfect"},
                        {"factors", std::move(factors)}};
 }
+
+// ---------------------------------------------------------------------------
+// M6 只读面（协议 v1.5 §5）：devices.list / diag.get 的数据侧。
+// ---------------------------------------------------------------------------
+
+std::int64_t AudioBackend::BufferMsNow() {
+    if (!deviceOpen_.load(std::memory_order_acquire) || deviceFacts_.appRate == 0) return 0;
+    return static_cast<std::int64_t>(RingReadableFrames()) * 1000 /
+           static_cast<std::int64_t>(deviceFacts_.appRate);
+}
+
+// 共享枚举面：ma_context_get_devices 会重新枚举并持 deviceEnumLock（miniaudio 内部串行，
+// 仅会话线程调用），结果缓存在 context 内。返回 null = 无可用 context（设备未开），
+// 调用方按 §5 回 not_implemented（不得拿空数组假装有设备）。
+proto::Json AudioBackend::ListDevices() {
+    if (!deviceOpen_.load(std::memory_order_acquire)) return proto::Json(nullptr);
+
+    ma_device_info* playbackInfos = nullptr;
+    ma_uint32 playbackCount = 0;
+    ma_device_info* captureInfos = nullptr;
+    ma_uint32 captureCount = 0;
+    if (ma_context_get_devices(&context_, &playbackInfos, &playbackCount, &captureInfos,
+                               &captureCount) != MA_SUCCESS ||
+        playbackCount == 0) {
+        return proto::Json(nullptr);
+    }
+
+    // 已开设备的协商周期（只对它报真实值，其余 null）。
+    const std::int64_t myPeriodMs =
+        deviceFacts_.appRate != 0 && deviceFacts_.periodFrames != 0
+            ? std::max<std::int64_t>(
+                  1, static_cast<std::int64_t>(deviceFacts_.periodFrames) * 1000 /
+                         static_cast<std::int64_t>(deviceFacts_.appRate))
+                  : 0;
+
+    proto::Json devices = proto::Json::array();
+    for (ma_uint32 i = 0; i < playbackCount; ++i) {
+        const auto& info = playbackInfos[i];
+        // nativeDataFormats 是定长内嵌数组（vendor 无公开 countof 宏，用 sizeof 自算）。
+        const ma_uint32 kFormatCap = static_cast<ma_uint32>(
+            sizeof(info.nativeDataFormats) / sizeof(info.nativeDataFormats[0]));
+        const bool isOpened = info.isDefault && deviceOpen_.load(std::memory_order_relaxed);
+        // 本实现只打开默认端点；当前产品面共享模式下唯一真用的设备即默认设备。
+        // 非默认设备的 min_period_ms 不报假数据（null），混音格式同理。
+
+        // nativeDataFormats 聚合：只取 2 声道（stereo 产品基线）的 {rate, bits}，
+        // 按 rate 升序分组去重。无 2ch 条目时保留全部（虚拟设备只报单声道等异常形态）。
+        std::vector<std::pair<ma_uint32, ma_uint32>> entries;  // (rate, bits)
+        for (ma_uint32 f = 0; f < info.nativeDataFormatCount && f < kFormatCap; ++f) {
+            const auto& df = info.nativeDataFormats[f];
+            if (df.sampleRate == 0) continue;  // "所有速率"的占位条目（null 后端）= 无信息
+            if (df.channels != 0 && df.channels != 2) continue;
+            entries.emplace_back(df.sampleRate, static_cast<ma_uint32>(FormatBits(df.format)));
+        }
+        if (entries.empty()) {
+            for (ma_uint32 f = 0; f < info.nativeDataFormatCount && f < kFormatCap; ++f) {
+                const auto& df = info.nativeDataFormats[f];
+                if (df.sampleRate == 0 || df.channels == 0) continue;
+                entries.emplace_back(df.sampleRate, static_cast<ma_uint32>(FormatBits(df.format)));
+            }
+        }
+        std::sort(entries.begin(), entries.end());
+        proto::Json rates = proto::Json::array();
+        ma_uint32 lastRate = 0;
+        for (const auto& [rate, bits] : entries) {
+            if (rates.is_array() && !rates.empty() && lastRate == rate) {
+                // 同 rate 合并 bits 数组（16/24/32 容器共存）。
+                rates.back()["bits"].push_back(bits);
+                continue;
+            }
+            lastRate = rate;
+            proto::Json bitsArr = proto::Json::array();
+            bitsArr.push_back(bits);
+            rates.push_back({{"rate", rate}, {"bits", std::move(bitsArr)}});
+        }
+
+        proto::Json mixFormat = proto::Json(nullptr);
+        std::int64_t minPeriodMs = 0;
+        if (isOpened) {
+            // 本实现已协商的混音格式（= 打开设备时选定的 f32 混音格式事实）；
+            // 其他设备的 GetMixFormat 属 M4 热切换域，不猜。
+            mixFormat = proto::Json{{"rate", deviceFacts_.appRate},
+                                    {"bits_container", FormatBits(deviceFacts_.appFormat)},
+                                    {"bits_valid", FormatBits(deviceFacts_.appFormat)},
+                                    {"encoding", deviceFacts_.appFormat == ma_format_f32
+                                                     ? std::string("pcm-float")
+                                                     : std::string("pcm")},
+                                    {"channels", deviceFacts_.appChannels}};
+            minPeriodMs = myPeriodMs;
+        }
+        devices.push_back({{"id", WideToUtf8Local(info.id.wasapi)},
+                           {"name", std::string(info.name)},
+                           {"kind", "playback"},
+                           {"default", info.isDefault == MA_TRUE},
+                           {"capabilities",
+                            proto::Json{{"rates", std::move(rates)},
+                                        {"min_period_ms", minPeriodMs == 0 ? proto::Json(nullptr)
+                                                                           : proto::Json(minPeriodMs)},
+                                        {"mix_format", std::move(mixFormat)},
+                                        // M4 域：独占能力未探测（v1.5 只读面明写 null）。
+                                        {"exclusive", proto::Json(nullptr)}}}});
+    }
+    return devices;
+}
+
 
 }  // namespace rhine

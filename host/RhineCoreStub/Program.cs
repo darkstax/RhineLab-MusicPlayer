@@ -29,7 +29,8 @@ internal static class Program
     private const string Ver = "0.1.0";
 
     /// <summary>协议 §4/§5：M1 核心声明 echo 与 engine.* 全集（§5 表 M1 行）。
-    /// devices/output/diag 属 M3/M4：caps 里不声明，被调用时按 §5 回 not_implemented。</summary>
+    /// M6（v1.5）补只读数据面 devices.list / diag.get（与真核心同形）；
+    /// devices.select/output.mode 涉 M4 独占协商：caps 不声明，被调用时按 §5 回 not_implemented。</summary>
     private static readonly string[] Caps =
     [
         "echo",
@@ -43,6 +44,9 @@ internal static class Program
         "engine.volume",
         // M3（协议 v1.3）：假谱与真核心同形（正弦+噪声，参数见 docs/M3-FINDINGS.md）。
         "spectrum",
+        // M6（协议 v1.5）：只读面——假设备矩阵 + 零值诊断（字段形状与真核心逐字一致）。
+        "devices.list",
+        "diag.get",
     ];
 
     private static readonly CancellationTokenSource Shutdown = new();
@@ -565,9 +569,32 @@ internal static class Program
                     },
                     events);
             }
+            // M6（协议 v1.5）只读面：diag.get 同形假数据——计数全 0（假引擎不会欠载）、
+            // buffer_ms_now 复用 position 的合成 buffered_ms、period_ms 固定假值、
+            // link 复用其 state 快照的 negotiated（桩豁免语义 = null，不得自加替代字段）、
+            // fallback_history 属 M4 域显式 null。
+            case "diag.get":
+            {
+                var buffered = Math.Min(Math.Max(0, Engine.DurationMs - Engine.PositionMs),
+                                        FakeEngine.SyntheticBufferedMs);
+                return (new Dictionary<string, object?>
+                {
+                    ["underruns"] = 0L,
+                    ["reopens"] = 0L,
+                    ["buffer_ms_now"] = buffered,
+                    ["period_ms"] = 10L,
+                    ["link"] = Engine.Snapshot()["negotiated"],
+                    ["fallback_history"] = null,
+                }, []);
+            }
+            // M6 只读面：假设备矩阵 = tools/win-audio-probe 本机实测三端点（AUDIO-ENGINE §23）
+            // 写死回放；字段形状与真核心逐字一致，exclusive=null（M4 域）、
+            // 非当前设备 mix_format/min_period_ms 同样 null（真核心同口径）。
+            case "devices.list":
+                return (new Dictionary<string, object?> { ["devices"] = FakeDeviceMatrix() }, []);
             // M3/M4 能力先占名（§5）：一律 not_implemented，不得静默丢弃。
-            case "devices.list" or "devices.select" or "output.mode" or "diag.get":
-                throw new EngineNotImplemented($"cmd '{cmd}' is not implemented before M3/M4");
+            case "devices.select" or "output.mode":
+                throw new EngineNotImplemented($"cmd '{cmd}' is not implemented before M4");
             case "engine.preload" or "engine.cancel_preload" or "engine.queue" or "config.get" or "config.set"
                 or "library.scan" or "library.query" or "taskbar.set":
                 throw new EngineNotImplemented($"cmd '{cmd}' is not implemented by this M1 stub");
@@ -589,6 +616,84 @@ internal static class Program
     {
         var events = action();
         return (new Dictionary<string, object?> { ["state"] = Engine.State.ToWire() }, events);
+    }
+
+    /// <summary>假设备矩阵（协议 v1.5 devices.list 形状；数据源 = win-audio-probe 2026-09-12
+    /// 实测，docs/AUDIO-ENGINE.md §23）：USB DAC（默认、f32@384k 混音、minPeriod 3ms）、
+    /// Realtek ALC256 内置、Steam 虚拟设备。id 用 MMDevice.ID endpoint 格式（§2）；
+    /// 能力字段仅列 2ch 整型/浮点实测档；exclusive 一律 null（M4 域）。</summary>
+    private static List<object?> FakeDeviceMatrix()
+    {
+        var caps = new Dictionary<string, object?>
+        {
+            ["rates"] = new List<object?>
+            {
+                new Dictionary<string, object?> { ["rate"] = 44100L, ["bits"] = new List<object?> { 16L, 24L, 32L } },
+                new Dictionary<string, object?> { ["rate"] = 48000L, ["bits"] = new List<object?> { 16L, 24L, 32L } },
+                new Dictionary<string, object?> { ["rate"] = 88200L, ["bits"] = new List<object?> { 16L, 24L, 32L } },
+                new Dictionary<string, object?> { ["rate"] = 96000L, ["bits"] = new List<object?> { 16L, 24L, 32L } },
+                new Dictionary<string, object?> { ["rate"] = 176400L, ["bits"] = new List<object?> { 16L, 24L, 32L } },
+                new Dictionary<string, object?> { ["rate"] = 192000L, ["bits"] = new List<object?> { 16L, 24L, 32L } },
+                new Dictionary<string, object?> { ["rate"] = 352800L, ["bits"] = new List<object?> { 16L, 24L, 32L } },
+                new Dictionary<string, object?> { ["rate"] = 384000L, ["bits"] = new List<object?> { 16L, 24L, 32L } },
+            },
+            ["min_period_ms"] = 3L,
+            ["mix_format"] = new Dictionary<string, object?>
+            {
+                ["rate"] = 384000L, ["bits_container"] = 32L, ["bits_valid"] = 32L,
+                ["encoding"] = "pcm-float", ["channels"] = 2L,
+            },
+            ["exclusive"] = null,
+        };
+        return new List<object?>
+        {
+            new Dictionary<string, object?>
+            {
+                ["id"] = @"{0.0.0.00000000}.{6f2e4a8d-3c2b-4d9e-9f41-2b7d5e8a1c03}",
+                ["name"] = "CX31993 MAX97220PRO (USB 音频设备)",
+                ["kind"] = "playback",
+                ["default"] = true,
+                ["capabilities"] = caps,
+            },
+            new Dictionary<string, object?>
+            {
+                ["id"] = @"{0.0.0.00000000}.{c41d9a2e-7b5f-4e86-a02d-6f38b1c94d7e}",
+                ["name"] = "扬声器 (Realtek(R) Audio)",
+                ["kind"] = "playback",
+                ["default"] = false,
+                ["capabilities"] = new Dictionary<string, object?>
+                {
+                    // 非当前设备：mix_format/min_period_ms 真核心也不报（M4 热切换域），同口径 null。
+                    ["rates"] = new List<object?>
+                    {
+                        new Dictionary<string, object?> { ["rate"] = 44100L, ["bits"] = new List<object?> { 16L, 24L, 32L } },
+                        new Dictionary<string, object?> { ["rate"] = 48000L, ["bits"] = new List<object?> { 16L, 24L, 32L } },
+                        new Dictionary<string, object?> { ["rate"] = 96000L, ["bits"] = new List<object?> { 16L, 24L, 32L } },
+                        new Dictionary<string, object?> { ["rate"] = 192000L, ["bits"] = new List<object?> { 16L, 24L, 32L } },
+                    },
+                    ["min_period_ms"] = null,
+                    ["mix_format"] = null,
+                    ["exclusive"] = null,
+                },
+            },
+            new Dictionary<string, object?>
+            {
+                ["id"] = @"{0.0.0.00000000}.{a8e3f21d-90c4-4b7f-8f52-3d7ab6e10f9c}",
+                ["name"] = "Speakers (Steam Streaming Speakers) [假数据——Steam 虚拟设备未激活时不枚举]",
+                ["kind"] = "playback",
+                ["default"] = false,
+                ["capabilities"] = new Dictionary<string, object?>
+                {
+                    ["rates"] = new List<object?>
+                    {
+                        new Dictionary<string, object?> { ["rate"] = 48000L, ["bits"] = new List<object?> { 16L } },
+                    },
+                    ["min_period_ms"] = null,
+                    ["mix_format"] = null,
+                    ["exclusive"] = null,
+                },
+            },
+        };
     }
 
     private static JsonObject Error(string? id, string code, string message, bool retryable)
@@ -634,6 +739,9 @@ internal static class Program
         // M3 假谱：bands 数组（64 个 0..1 数值，协议 §6 v1.3）。
         List<double> numbers => new JsonArray(numbers.Select(d => (JsonNode)JsonValue.Create(d)!).ToArray()),
         IReadOnlyDictionary<string, object?> map => AsObject(map),
+        // M6 devices.list：任意嵌套对象数组（List<object?> 内装字典/基元）——统一走可枚举分支。
+        System.Collections.IEnumerable seq => new JsonArray(
+            seq.Cast<object?>().Select(JsonValueOf).ToArray()),
         _ => throw new InvalidOperationException($"unsupported result type {value.GetType().Name}"),
     };
 
