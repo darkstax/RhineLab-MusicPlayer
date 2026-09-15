@@ -527,6 +527,11 @@ export class ArchiveScene {
       }),
     );
     label.position.set(-1.36, 3.04, 0.255);
+    // R7（用户实测"贴纸有时被封面盖住"）：标签与封面都是 transparent + depthWrite:false，
+    // 绘制顺序原本靠 Three.js 的"按相机距离排序"——封面(z≈0.48)与标签(z=0.255)深度接近时
+    // 顺序会随相机角度翻转，导致贴纸时有时无。显式给贴纸更高的 renderOrder 保证恒在最前。
+    // （Three.js 对同 renderOrder 才按距离排序；不同 renderOrder 严格按值升序绘制。）
+    label.renderOrder = 2;
     this.model.add(label);
     this.appearance.prepare(this.model);
     this.appearance.apply(this.model, 0);
@@ -545,6 +550,8 @@ export class ArchiveScene {
         depthWrite: false,
       }),
     );
+    // R7：封面基准 renderOrder 低于贴纸（贴纸=2），确保贴纸恒在最前。
+    this.coverMesh.renderOrder = 1;
     this.coverMesh.position.set(0, 1.85, 0.24);
     this.coverMesh.visible = false;
     this.scene.add(this.coverMesh);
@@ -603,6 +610,7 @@ export class ArchiveScene {
       }),
     );
     label.position.set(-1.36, 3.04, 0.255);
+    label.renderOrder = 2;   // R7：贴纸恒在封面上方（见上处注释）
     label.userData.assemblyPart = "cover";
     label.userData.themeAmount = themeMaterial(label.material, "Printed_Canvas");
     label.userData.themeAmount.value = this.themeAmount;
