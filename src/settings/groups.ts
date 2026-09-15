@@ -86,6 +86,9 @@ export const CONFIG_DEFAULTS: Readonly<Record<string, unknown>> = {
   "quality.replay_gain": "off",
   "quality.crossfade_ms": 0,
   "wall.covers": "textures",
+  // 播放条三态循环模式（顺序/专辑/单曲）。非 AUDIO-ENGINE §15 键，但走同一条 dot-path 总线：
+  // 桌面写壳 config.json，web 落 localStorage 镜像；播放条的循环钮即写入端。
+  "player.loop_mode": "sequential",
   "lyric.offset_ms": 0,
   "lyric.render": "word",
   "lyric.translation": true,

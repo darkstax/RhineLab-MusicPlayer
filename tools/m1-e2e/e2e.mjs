@@ -59,9 +59,12 @@ check("握手 ok 且壳通道 ready", hello.ok === true && hello.state === "read
 check("核心 hello 快照含 engine.* caps", Array.isArray(hello.coreCaps) && hello.coreCaps.includes("engine.play"));
 check("核心 hello 携带会话世代 ep（v1.2 经壳透传）", typeof hello.coreEp === "number", `ep=${hello.coreEp}`);
 
-// ---------- 播放（LOAD 手输 id = 档案即曲目降级接线） ----------
-await page.fill("#player-bar .pb-id", "X-007");
-await page.click("#player-bar .pb-play-btn");
+// ---------- 播放（真 IPC；播放条的"手输档案号 + LOAD"已删除，改由桥直接下发同一命令） ----------
+// 页面是 dist 产物（app.rhine.local 虚拟主机），拿不到 /src 模块路径，故这里只验 IPC 链路本身；
+// 播放条的点击路径（专辑行 → playQueue → engine.play）由 web 降级脚本与人工验收覆盖。
+await page.evaluate(() =>
+  window.__rhineBridge.call("engine.play", { track_id: "X-007", duration_ms: 180000 }),
+);
 await page.waitForFunction(() => {
   const s = window.__rhinePlayer?.snapshot();
   return s && s.trackId === "X-007" && s.state === "playing" && s.engine === "desktop";

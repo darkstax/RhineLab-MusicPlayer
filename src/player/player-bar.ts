@@ -1,16 +1,20 @@
 import { createRollingText } from "@kitlangton/rolling-number";
 import { playerStore, type PlayerSnapshot } from "./player-store";
+import { LOOP_MODE_TEXT } from "./queue";
 import { spectrumBridge } from "./spectrum-bridge";
 import { FidelityBadges } from "./FidelityBadges";
 import { lyricView } from "./lyrics/lyric-view";
 
 /**
  * 底部最小播放条（任务书 M1 范围 C3）：
- * 曲目名（复用上游 createRollingText 滚动文字）、播放/暂停/停止钮、可拖拽 seek 进度条（mm:ss）、
- * 音量条（engine.volume float 语义）、错误 toast、保真徽章占位。
+ * 曲目名（复用上游 createRollingText 滚动文字）、上一首/播放暂停/停止/下一首、循环模式三态钮、
+ * 可拖拽 seek 进度条（mm:ss）、音量条（engine.volume float 语义）、错误 toast、保真徽章占位。
  *
  * 视觉语言全部取 theme-ui.ts 注入的 --theme-* 变量（亮暗自动跟随）；零新依赖；
  * pointer-events 自管，不干扰上游阵列拖动（只在自己的条内响应）。
+ *
+ * 本轮删除"档案号输入 + LOAD"（曲目一律由曲库/专辑详情点选）：手输 id 既没有队列归属、
+ * 也没有真实时长，留着只是把错误用法摆在最显眼的位置。playerStore.play() 能力保留。
  */
 
 const reducedMotion = () =>
@@ -69,8 +73,13 @@ export function mountPlayerBar(root: HTMLElement): () => void {
         <span class="pb-badges"></span>
       </div>
       <div class="pb-controls">
+        <button type="button" class="pb-btn pb-prev" aria-label="上一首">⏮</button>
         <button type="button" class="pb-btn pb-toggle" aria-label="播放或暂停">▶</button>
         <button type="button" class="pb-btn pb-stop" aria-label="停止">■</button>
+        <button type="button" class="pb-btn pb-next" aria-label="下一首">⏭</button>
+        <button type="button" class="pb-btn pb-loop" aria-label="循环模式">
+          <span class="pb-loop-icon" aria-hidden="true"></span><span class="pb-loop-sup" aria-hidden="true"></span><span class="pb-loop-text"></span>
+        </button>
       </div>
       <div class="pb-progress" role="slider" tabindex="0" aria-label="播放进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
         <div class="pb-rail"><div class="pb-fill"></div><div class="pb-knob"></div></div>
@@ -80,10 +89,6 @@ export function mountPlayerBar(root: HTMLElement): () => void {
         <span class="pb-vol-icon" aria-hidden="true">VOL</span>
         <input type="range" min="0" max="1" step="0.01" value="1" aria-label="音量" />
       </label>
-      <div class="pb-load">
-        <input type="text" class="pb-id" placeholder="档案号 · X-001" aria-label="档案号（即曲目 id）" />
-        <button type="button" class="pb-btn pb-play-btn">LOAD</button>
-      </div>
     </div>
     <div class="pb-spectrum" aria-hidden="true">${"<i></i>".repeat(16)}</div>
     <div class="pb-toast" role="status" hidden></div>
@@ -94,16 +99,20 @@ export function mountPlayerBar(root: HTMLElement): () => void {
   const titleEl = el(".pb-title");
   const rollEl = el(".pb-title-roll");
   const badgesEl = el(".pb-badges");
+  const prevEl = el(".pb-prev") as HTMLButtonElement;
   const toggleEl = el(".pb-toggle") as HTMLButtonElement;
   const stopEl = el(".pb-stop") as HTMLButtonElement;
+  const nextEl = el(".pb-next") as HTMLButtonElement;
+  const loopEl = el(".pb-loop") as HTMLButtonElement;
+  const loopIconEl = el(".pb-loop-icon");
+  const loopSupEl = el(".pb-loop-sup");
+  const loopTextEl = el(".pb-loop-text");
   const progressEl = el(".pb-progress");
   const fillEl = el(".pb-fill");
   const knobEl = el(".pb-knob");
   const posEl = el(".pb-pos");
   const durEl = el(".pb-dur");
   const volumeInput = el(".pb-volume input") as HTMLInputElement;
-  const idInput = el(".pb-id") as HTMLInputElement;
-  const playBtn = el(".pb-play-btn") as HTMLButtonElement;
   const toastEl = el(".pb-toast");
   const spectrumEl = root.querySelector<HTMLElement>(".pb-spectrum")!;
   const spectrumBars = Array.from(spectrumEl.querySelectorAll<HTMLElement>("i"));
@@ -214,6 +223,10 @@ export function mountPlayerBar(root: HTMLElement): () => void {
 
   toggleEl.addEventListener("click", () => void playerStore.toggle());
   stopEl.addEventListener("click", () => void playerStore.stop());
+  prevEl.addEventListener("click", () => void playerStore.previous());
+  nextEl.addEventListener("click", () => void playerStore.next());
+  // 三态循环钮：点一次进一档（顺序 → 专辑 → 单曲），文案/图标由订阅帧统一重绘。
+  loopEl.addEventListener("click", () => playerStore.cycleLoopMode());
 
   // M5b：歌词展开按钮（样式在 lyrics/lyric-view.css，不动 player.css；面板状态由 lyricView 回调同步）。
   lyricView.attachButtonTo(root.querySelector<HTMLElement>(".pb-controls")!);
@@ -221,24 +234,6 @@ export function mountPlayerBar(root: HTMLElement): () => void {
   volumeInput.addEventListener("input", () => {
     if (suppressVolumeEvent) return;
     void playerStore.setVolume(Number(volumeInput.value));
-  });
-
-  const loadTrack = () => {
-    let id = idInput.value.trim();
-    if (!id) {
-      // 降级接线（任务书 C4：archive 事件不可达 → 不侵入上游）：输入为空时读主界面
-      // 当前选中档案号，演示“档案即曲目”。#selected-id 内嵌 Rolling Number，
-      // textContent 会混入测量/动画节点，所以取“X-”前缀 + .rn-value 的数字部分。
-      const code = document.querySelector("#selected-id .rn-value")?.textContent?.trim();
-      id = code ? `X-${code}` : (document.getElementById("selected-id")?.textContent?.trim() ?? "");
-      if (id) idInput.value = id;
-    }
-
-    if (id) void playerStore.play(id);
-  };
-  playBtn.addEventListener("click", loadTrack);
-  idInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") loadTrack();
   });
 
   const unsubscribe = playerStore.subscribe((snapshot) => {
@@ -285,6 +280,19 @@ export function mountPlayerBar(root: HTMLElement): () => void {
     progressEl.setAttribute("aria-valuenow", String(Math.round(ratio * 100)));
     toggleEl.textContent = snapshot.state === "playing" ? "❚❚" : "▶";
     toggleEl.setAttribute("aria-label", snapshot.state === "playing" ? "暂停" : "播放");
+
+    // 队列只有一首（或无队列）时没有可去的地方：灰显上/下一首，避免点了没反应的死按钮。
+    const skippable = snapshot.queueLength > 1;
+    prevEl.disabled = !skippable;
+    nextEl.disabled = !skippable;
+
+    const loop = LOOP_MODE_TEXT[snapshot.loopMode];
+    loopIconEl.textContent = loop.glyph;
+    loopSupEl.textContent = loop.sup ?? "";
+    loopTextEl.textContent = loop.label;
+    loopEl.dataset.mode = snapshot.loopMode;
+    loopEl.title = loop.hint;
+    loopEl.setAttribute("aria-label", `${loop.hint}；点击切换`);
 
     if (document.activeElement !== volumeInput) {
       suppressVolumeEvent = true;

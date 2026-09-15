@@ -120,8 +120,7 @@ $("#stage").innerHTML = `
     <div class="object-caption"><span id="object-id">NO.001</span><div id="caption-group">INTERNAL DATABASE</div><small><span id="drag-caption">DRAG TO INSPECT</span> <span>↔</span></small><button class="viewer-open" data-action="model-viewer">360° 查看文档模型 <span>↗</span></button></div>
     <article id="detail-content" class="detail-content"></article>
   </section>
-  <div class="powered">POWERED BY <b>RHINE LAB</b><i></i></div>
-  <footer class="system-footer"><span><i class="status-light"></i> SESSION AUTHORIZED${isWallpaper ? '<button type="button" class="three-toggle" data-action="toggle-three" aria-pressed="true" title="卸载三维模型，保留 2D 界面">3D 开启</button>' : ''}</span><span><span id="footer-user">JOYCE MOORE</span><span id="footer-stats" hidden></span> <i>／</i> <span id="clock">00:00:00</span></span><button data-action="replay" title="重播启动流程">REINITIALIZE ↗</button></footer>
+  <footer class="system-footer"><span><i class="status-light"></i> SESSION AUTHORIZED${isWallpaper ? '<button type="button" class="three-toggle" data-action="toggle-three" aria-pressed="true" title="卸载三维模型，保留 2D 界面">3D 开启</button>' : ''}</span><span><span id="footer-user">JOYCE MOORE</span> <i>／</i> <span id="clock">00:00:00</span></span></footer>
   <div id="pwa-update-notice" class="pwa-update-notice" role="status" hidden><span>新版本已就绪</span><button data-pwa-action="update">更新并重启 ↻</button></div>
   <div id="modal-root"></div><div id="toast" class="toast" role="status"></div>
   <div id="loading" class="loading"><div class="loading-mark">${logo}</div><span>CONNECTING TO INTERNAL DATABASE</span><i></i></div>
@@ -534,31 +533,8 @@ function updateSelection(navigation?: ArchiveNavigation) {
   $("#saved-count").textContent = String(saved.size).padStart(2, "0");
 }
 
-/** 页脚统计条（M5d 稿 1：LOCAL COLLECTION · N ALBUMS / M TRACKS）；水合态替换 JOYCE MOORE 位。 */
-async function updateFooterStats() {
-  const statsSpan = $("#footer-stats");
-  const userSpan = $("#footer-user");
-  if (!statsSpan || !userSpan) return;
-  if (!wallMode.hydrated) {
-    statsSpan.hidden = true;
-    userSpan.hidden = false;
-    return;
-  }
-  userSpan.hidden = true;
-  statsSpan.hidden = false;
-  try {
-    const result = (await bridge.call("library.stats", {}, 5000)) as Record<string, unknown> | null;
-    const albums = typeof result?.albums === "number" ? result.albums : records.length;
-    const tracks = typeof result?.tracks === "number" ? result.tracks : 0;
-    // P1-5（审查）：albums 查询无 offset → 超 limit 静默截断；页脚如实标注已显示数，
-    // 不让用户面对"莫名少了一批专辑"无提示（truncated 消费点，data.ts 已置位）。
-    const shown = records.length;
-    const truncNote = wallMode.truncated && shown < albums ? ` (显示 ${shown})` : "";
-    statsSpan.textContent = `LOCAL COLLECTION · ${albums} ALBUMS${truncNote} / ${tracks} TRACKS`;
-  } catch {
-    statsSpan.textContent = `LOCAL COLLECTION · ${records.length} ALBUMS`;
-  }
-}
+// R8（用户要求）：页脚统计行（LOCAL COLLECTION · N ALBUMS / M TRACKS）与
+// REINITIALIZE 按钮已移除；曲库规模在「设置 → 库」与全局搜索里可见，页脚不再重复。
 
 /**
  * 阵列态右侧浮层扩展行（M5d 稿 1：艺术家行 + year/曲目数/总时长）+ 格式角标：
@@ -1060,11 +1036,15 @@ document.addEventListener("click", (e) => {
     });
     return;
   }
-  // 专辑墙：歌单行点击 → engine.play lib:<id>（壳侧解析为 file:<path>，协议 §5.1）。
+  // 专辑墙：歌单行点击 → **整张专辑入队**并播这一首（壳侧把 lib:<id> 解析为 file:<path>）。
+  // 队列项取自 playlistCache 行（带真实 duration_ms，切曲不再查库；映射是纯函数，见 queue.ts
+  // 的 albumQueue 与其单测）；点行不在缓存里（歌单尚未回填）时退回单曲播放，能力不减。
   const trackRow = el.closest<HTMLElement>("[data-track-play]");
   if (trackRow && mode === "detail" && wallMode.hydrated) {
-    const id = trackRow.dataset.trackPlay;
+    const id = Number(trackRow.dataset.trackPlay);
     const title = trackRow.dataset.trackTitle || "";
+    const album = records[selected];
+    const rows = (album.albumKey ? playlistCache.get(album.albumKey)?.rows : undefined) ?? [];
     const durText = trackRow.querySelector(".tr-dur")?.textContent?.trim() ?? "";
     const parts = durText.split(":").map((p) => Number(p));
     const durationMs =
@@ -1073,8 +1053,13 @@ document.addEventListener("click", (e) => {
             ? parts[0] * 3600 + parts[1] * 60 + parts[2]
             : parts[0] * 60 + parts[1]) * 1000
         : 180_000;
-    void import("./player/player-store").then(({ playerStore }) =>
-      playerStore.play(`lib:${id}`, durationMs),
+    void Promise.all([import("./player/player-store"), import("./player/queue")]).then(
+      ([{ playerStore }, { albumQueue }]) => {
+        const { tracks, startIndex } = albumQueue(rows, id);
+        return startIndex >= 0
+          ? playerStore.playQueue(tracks, startIndex)
+          : playerStore.play(`lib:${id}`, durationMs);
+      },
     );
     notify(title ? `正在播放：${title}` : "正在播放…");
     return;
@@ -1262,7 +1247,6 @@ function bootFrame(t: number) {
   const motion = bootSequence.update(t);
   if (workbench?.enabled && frozenTime === null) {
     const end = openingShowsDetail(wallpaperHost()?.properties.openingdetail?.value, true) ? 35 : ARRAY_OPENING_END;
-    if (t > end - .35) $(".powered").style.opacity = String(1 - ease((t - end + .35) / .35));
   }
   let step: string = motion.step;
   if (t >= 22) {
@@ -1461,7 +1445,6 @@ async function start() {
     await wallSession.hydration;
     await albumWall.loadConfig(); // wall.covers 三态（web/壁纸 = 同步回退，无额外延迟）
     rebuildColumnMemory();
-    updateFooterStats();
     updateSelection();
     if (!isWallpaper || wallpaperHost()?.properties.load3donstartup?.value !== false) {
       scene = new ArchiveScene($("#three-scene"));

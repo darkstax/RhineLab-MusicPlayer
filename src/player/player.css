@@ -20,7 +20,9 @@
 #player-bar .pb-main {
   display: flex;
   align-items: center;
-  gap: 14px;
+  /* 本轮新增上/下一首与循环钮后，定宽 980px 已接近满载（进度条只剩 ~10px 余量），
+     组间距 14 → 12 让出 10px，避免字体/缩放差异下再次溢出。 */
+  gap: 12px;
   padding: 8px 14px;
   background: rgba(var(--theme-paper-rgb, 234, 229, 225), 0.82);
   border: 1px solid var(--theme-line, #aaa59a);
@@ -55,10 +57,12 @@
 #player-bar .pb-title {
   /* UI 修复（用户定方向）：超长曲目/歌词**不再截断死磕**，改横向滚动跑马灯：
      外层定宽窗口 overflow hidden，内层 .pb-title-roll 按内容宽，溢出时 JS 挂
-     pb-overflow 类 + CSS 变量驱动来回滚动；悬停暂停方便读。reduced-motion 降级截断。 */
+     pb-overflow 类 + CSS 变量驱动来回滚动；悬停暂停方便读。reduced-motion 降级截断。
+     本轮新增上/下一首与循环钮后 150 → 140：给定宽 980px 留出余量（跑马灯按实际
+     窗口宽度自适应，缩小窗口不影响可读性）。 */
   position: relative;
-  flex: 0 0 150px;
-  width: 150px;
+  flex: 0 0 140px;
+  width: 140px;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
@@ -109,7 +113,7 @@
 }
 
 #player-bar .pb-btn {
-  min-width: 34px;
+  min-width: 32px;
   height: 30px;
   border: 1px solid var(--theme-line, #aaa59a);
   border-radius: 6px;
@@ -125,9 +129,57 @@
   color: var(--theme-accent, #9b7247);
 }
 
+/* 上/下一首：队列里没有第二首时无可去之处 → 灰显（JS 写 disabled），避免死按钮。 */
+#player-bar .pb-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+#player-bar .pb-btn:disabled:hover {
+  border-color: var(--theme-line, #aaa59a);
+  color: var(--theme-ink, #080a08);
+}
+
+/* 循环模式三态钮：图标 +「1」上标 + 中文小字，三档一眼可分；
+   非顺序档用强调色标出当前档位（顺序=默认态，不抢视线）。 */
+#player-bar .pb-loop {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: 58px;
+}
+
+#player-bar .pb-loop[data-mode="album"],
+#player-bar .pb-loop[data-mode="single"] {
+  border-color: var(--theme-accent, #9b7247);
+  color: var(--theme-accent, #9b7247);
+}
+
+#player-bar .pb-loop-icon {
+  font-size: 12px;
+}
+
+#player-bar .pb-loop-sup {
+  position: relative;
+  top: -3px;
+  font-size: 8px;
+}
+
+#player-bar .pb-loop-sup:empty {
+  display: none;
+}
+
+#player-bar .pb-loop-text {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
 #player-bar .pb-progress {
-  flex: 2 1 200px; /* UI 修复：下限 240→200，优先保 identity */
-  min-width: 120px;
+  /* 本轮新增上/下一首与循环钮后重算：120 → 104，把定宽 980px 的额度让给新增按钮
+     （进度条是拖动区，104px 仍可用；窄窗口另有 820px 换行档兜底）。 */
+  flex: 2 1 200px;
+  min-width: 104px;
   height: 22px;
   display: flex;
   align-items: center;
@@ -182,35 +234,11 @@
 }
 
 #player-bar .pb-volume input {
-  width: 84px;
-  min-width: 56px;
+  /* 本轮新增上/下一首与循环钮后，980px 定宽会把音量条挤出主条右缘（实测 over≈27px，
+     且 range 输入在 Chrome 下不参与收缩）。滑块 84 → 70 定宽让位；≤920px 档仍整体隐藏。 */
+  width: 70px;
+  min-width: 70px;
   accent-color: var(--theme-accent, #9b7247);
-}
-
-#player-bar .pb-load {
-  display: flex;
-  gap: 6px;
-  /* R6（用户实测）：原无弹性约束 → 窗口偏窄时整个 load 组溢出播放条右边界
-     （截图 1226px 宽下 LOAD 已经压到边框外）。允许收缩，输入框先让位。 */
-  flex: 0 1 auto;
-  min-width: 0;
-}
-
-#player-bar .pb-id {
-  width: 118px;
-  min-width: 0;
-  flex: 1 1 118px;
-  height: 30px;
-  border: 1px solid var(--theme-line, #aaa59a);
-  border-radius: 6px;
-  background: var(--theme-field, #e7e3d9);
-  color: var(--theme-ink, #080a08);
-  padding: 0 8px;
-  font: inherit;
-}
-
-#player-bar .pb-id::placeholder {
-  color: var(--theme-muted, #77756d);
 }
 
 #player-bar .pb-toast {
@@ -224,9 +252,12 @@
   padding: 4px 10px;
 }
 
-/* UI 修复：980px 定宽下单行已可容纳；真正的窄窗口（<820px）才换行，
-   阈值从 720 上调到 820，避免临界宽度下再次重叠。 */
-@media (max-width: 820px) {
+/* UI 修复：980px 定宽下单行已可容纳；真正的窄窗口才换行，阈值从 720 上调到 820，
+   避免临界宽度下再次重叠。
+   本轮（2026-09-16 队列/循环钮）再上调到 880：新增上/下一首与循环钮后实测
+   820–880 这段单行版溢出 19–40px（体积条被挤到主条外），换行后行一需求约 777px，
+   806px 的可见宽度足够；≤880 起即用两行是安全的。 */
+@media (max-width: 880px) {
   #player-bar .pb-main {
     flex-wrap: wrap;
     row-gap: 8px;
@@ -275,23 +306,17 @@
   will-change: transform;
 }
 
-/* R6（用户实测）：中等宽度（≤1120px）下 identity/progress/times/volume/load 总需求超过
-   播放条定宽，原实现让最后的 load 组溢出右边界。此档收起档案号输入框（LOAD 按钮保留，
-   曲目 id 实际由曲库点选决定，手输是次要路径）。 */
-@media (max-width: 1120px) {
-  #player-bar .pb-id {
-    display: none;
-  }
-  #player-bar .pb-load {
-    flex: 0 0 auto;
-  }
-}
-
-/* 更窄档：音量滑块也让位（VOL 图标保留，滚轮/系统音量仍可用）。 */
-@media (max-width: 920px) {
+/* 中等宽度（≤1080px）：定宽已在缩小（min(980, 100vw-32)），音量滑块先让位
+   （VOL 图标保留，滚轮/系统音量仍可用）；本轮新增上/下一首与循环钮后，
+   溢出带从 ≤920px 前移到 ≤1080px，故断点同步上移。 */
+@media (max-width: 1080px) {
   #player-bar .pb-volume input[type="range"] {
     display: none;
   }
+}
+
+/* 更窄档：标题窗口收窄（跑马灯按实际宽度自适应）。 */
+@media (max-width: 920px) {
   #player-bar .pb-title {
     flex: 0 0 110px;
     width: 110px;

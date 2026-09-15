@@ -46,6 +46,10 @@ if (bridge.desktop) {
  * R6（用户实测）：此前只取歌词、不取标题，播放条于是显示 `ARCHIVE lib:1143`（原始 track_id）
  * 而不是真实歌名。现在一次 library.get 同时补**标题**与**歌词**——不多一次往返。
  * 标题回填走 playerStore.setTrackLabel（用户选曲后瞬时显示 id，随即被真名覆盖）。
+ *
+ * 队列回合（连点下一首 / 曲终自动切曲）：一次查询可能在切曲之后才回来，
+ * 过期结果会把**当前**曲的标题与歌词写串（歌词立即错、标题还会进 resolvedLabels 缓存）。
+ * 回填前用 trackId 核对批次，过期即丢弃。
  */
 function loadTrackMeta(trackId: string | null): void {
   const match = trackId ? /^lib:(\d+)$/.exec(trackId) : null;
@@ -53,9 +57,11 @@ function loadTrackMeta(trackId: string | null): void {
     lyricView.setText(null);
     return;
   }
+  const stale = () => playerStore.state.trackId !== trackId;
   bridge
     .call("library.get", { id: Number(match[1]) })
     .then((result) => {
+      if (stale()) return;
       const dto = result as { lyric_text?: unknown; title?: unknown; artist?: unknown } | null;
       const text = dto?.lyric_text;
       lyricView.setText(typeof text === "string" ? text : null);
@@ -64,7 +70,10 @@ function loadTrackMeta(trackId: string | null): void {
       const artist = typeof dto?.artist === "string" && dto.artist.trim() ? dto.artist.trim() : null;
       if (title) playerStore.setTrackLabel(artist ? `${title} · ${artist}` : title);
     })
-    .catch(() => lyricView.setText(null)); // 壳未就绪/查询失败：空态，不打断播放
+    .catch(() => {
+      // 壳未就绪/查询失败：空态，不打断播放（过期失败同样丢弃）。
+      if (!stale()) lyricView.setText(null);
+    });
 }
 
 function mountLyricWiring(): void {
