@@ -113,4 +113,46 @@ bash tools/output-policy-test/run.sh                                     # 策�
 | 30min underrun 长跑 | ⏸ 未做 | M4-PLAN 要求；`expand-smoke` 已覆盖升档逻辑，长跑属统计验证 |
 | `volume.mode=integer` | ⏸ 未实现 | 定点位完美衰减；设置页已标占位灰显 |
 | `output.on_device_gone=pause` | ⏸ 未实现 | 当前行为恒为"自动重开"；设置页已标占位灰显 |
-| 核心崩溃自动重启 | ❌ **未实现** | `IPC-PROTOCOL.md:186` 有承诺但全仓无代码（cb R3 发现） |
+| 核心崩溃自动重启 | ⏸ **分两步，本次留接缝** | `IPC-PROTOCOL.md:186` 有承诺但全仓无代码（cb R3 发现）；R5 已修启动路径（CoreLaunch 决策），重启监督待做 |
+
+---
+
+## 6. R5：发行版启动不拉起核心（**发布阻断级**，cb 定方案 + 真机实测）
+
+**性质**：比上表任何一项都严重——**用户拿到 zip/exe 双击后完全无声、无法播放**。
+M6-F 验收盲区：当时只验了前端产物定位（`ZIP-CLEAN-VERIFY` 验的是 `dist=...web`），
+**没验核心生命周期**。
+
+**现象（真机实测）**：解压 zip → 双击 `RhineShell.exe` →
+```
+=== 进程 ===
+39748 RhineShell        <- 只有壳，无 RhineCore / RhineCoreStub
+=== shell.log ===
+warn core connection failed: The operation has timed out.
+info core reconnect in 500ms attempt=1 ... attempt=5   <- 无限重连失败
+```
+
+**根因链（两层，cb 复核补出第二层）**：
+1. 壳拉核唯一入口是 `--spawn-core`（`ShellOptions.cs:87`），而发行版 4 个启动入口
+   （installer 开始菜单 `rhine.iss:51`、桌面 `:53`、完成页 `:56`、zip README）**都不带它**。
+2. `--core-exe` 缺省**硬编码为桩**（`RhineCoreStub.exe`）——随包的真核心
+   `core/RhineCore.exe` 就在同目录，却从不被选中。
+3. 开发期从未暴露：4 个脚本（`m-verify:278` / `m1-run:89` / `smtc-check:107` / `m1-e2e`）
+   都**替壳起了核**，壳的 spawn 分支零自动化覆盖。
+
+**修法（默认值反转，方案 B）**：
+- 无参数启动 ⇒ 拉起核心；按「显式 `--core-exe` > `core/RhineCore.exe` > `core/RhineCoreStub.exe`」选择。
+- `--no-spawn-core` 供外部核心场景（4 个脚本已加；漏加也不坏——子核被管道互斥吸收为 `exit 3` 自灭，壳照连外部核）。
+- 决策抽为纯逻辑 `CoreLaunch.Resolve`（零 WPF 依赖，WSL 可跑单测）。
+
+**验证（可证伪）**：
+
+| 手段 | 结果 |
+|---|---|
+| 真机：zip 解压 → **零参数**启动 | ✅ 自动拉起 `RhineCore pid=12748`、握手成功、无重连失败、关窗无残留 |
+| 变异测试（改回旧行为） | ✅ `M6-LAUNCH-SMOKE-FAIL (5)` |
+| 单测 `CoreLaunchTests` | ✅ 6/6（含"默认选真核心"） |
+| `m-verify -Level full` | ✅ **10 步全绿**，含新增 `packaged-launch` |
+
+**新增防复发资产**：`tools/m6-smoke/launch-smoke.ps1`（Tier-1 结构断言）、
+`m-verify` 的 `packaged-launch` 用例、`package.ps1` 的产物断言（缺核心即 throw）。
