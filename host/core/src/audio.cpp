@@ -415,7 +415,16 @@ bool AudioBackend::RestorePinnedIfAvailable() {
 // M4-a 核心：播放期按源格式重开设备（独占/换率/降级）。调用方保证安全点（设备已停、
 // 解码已静默）。成功→facts_/decoder 输出率对齐；失败→降级共享（保出声优先）。
 bool AudioBackend::ReopenForTrack(ma_uint32 srcRate, std::string& why) {
-    const OutputMode requested = policy_.requested();
+    OutputMode requested = policy_.requested();
+    // R4（交互④现场："拔掉 DAC 也正常播放 → 过了一会声音没了"）：**回退态禁止独占**。
+    // 用户钉选的是 DAC；DAC 拔掉后我们退回默认设备（Realtek 等）。此时若仍按
+    // policy_.requested()=exclusive 去开，会在**未经用户授权的设备**上抢独占：
+    //   ①静音其它应用（违反 §15）；
+    //   ②MaybeRecoverExclusive 每 5s 探测一次 → 反复重建链 → 听感中断（"过一会声音没了"）。
+    // 判定：用户有钉选意图但当前未钉着（= 正在用回退设备）→ 强制 shared。
+    if (hasPinnedIntent_ && !hasDeviceId_) {
+        requested = OutputMode::Shared;
+    }
     // 完整关闭（stop+uninit）：OpenDeviceKind 会对同一 device_ 二次 init，
     // 只 stop 不 uninit 是句柄泄漏（自查修正）。调用方已保证安全点（解码静默）。
     CloseDeviceOnly();

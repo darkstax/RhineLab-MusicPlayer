@@ -77,6 +77,10 @@ public:
     bool SelectDevice(const std::string& endpointId, std::string& error);
     /** R4（交互④）：钉选设备插回后恢复钉选（返回 true = 已恢复；调用方据此重建链）。 */
     bool RestorePinnedIfAvailable();
+    /** 用户是否钉选过设备（意图；拔出后保留）。 */
+    bool has_pinned_intent() const { return hasPinnedIntent_; }
+    /** 当前是否真的钉着（false = 处于回退/跟随默认态）。 */
+    bool pinned_active() const { return hasDeviceId_; }
 
     // ---- M4 输出策略（协议 v1.6 output.mode；协商状态机在 OutputPolicy，纯逻辑单测）----
     void ConfigureOutput(const OutputPolicyConfig& config) { policy_.UpdateConfig(config); }

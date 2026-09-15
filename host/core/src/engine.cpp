@@ -338,10 +338,13 @@ std::vector<std::pair<std::string, proto::Json>> Engine::MaybeRecoverExclusive()
     if (trackId_.empty() || state_ == State::Playing || !audio_.track_open()) return extra;
     const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
-    if (!audio_.policy().ProbeDue(nowMs)) return extra;
-    // R4（交互④后半句"插回 → 切回"）：钉选设备插回时先恢复钉选（拔出时只临时解钉，
-    // 用户意图保留着），再走下面的重建（会按钉选设备重开）。
+    // R4（交互④）：**回退态不得探测**。用户钉选的设备不在时我们退到了默认设备，
+    // 此时探测=在未授权设备上试开独占 → 每 5s 一次重建链，听感反复中断
+    // （用户现场："拔掉 DAC 也正常播放 → 过了一会声音没了"）。
+    // 正确时机是钉选设备**插回之后**（下面 RestorePinnedIfAvailable 成功）。
     const bool repinned = audio_.RestorePinnedIfAvailable();
+    if (!repinned && audio_.has_pinned_intent() && !audio_.pinned_active()) return extra;
+    if (!audio_.policy().ProbeDue(nowMs)) return extra;
     const bool wasExclusive = audio_.exclusive();
     const std::int64_t frozenMs = PositionMs();
     std::string error;
