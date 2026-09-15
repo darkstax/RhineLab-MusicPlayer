@@ -70,9 +70,12 @@ export const PRESETS: readonly PresetDef[] = [
   {
     id: "audiophile",
     label: "发烧",
-    desc: "共享输出 · 无缝 · 全旁路（解码直通不重采样）",
+    desc: "独占输出 · 无缝 · 全旁路（位完美直通不重采样）",
     ipc: {
-      "output.mode": "shared",
+      // R8（用户裁定）：发烧档直接请求独占——预设是**用户主动选择**的行为，
+      // 不违反 §15「独占绝不默认开」（默认值仍为 shared，见 OutputPolicyConfig）。
+      // 独占下会静音其它应用（Q7 keep 语义），故 EXCLUSIVE_NOTE 在 note 里明示。
+      "output.mode": "exclusive",
       "quality.volume_mode": "fixed",
       "quality.resample": "off",
       "quality.gapless": true,
@@ -81,7 +84,7 @@ export const PRESETS: readonly PresetDef[] = [
       "quality.crossfade_ms": 0,
     },
     local: {},
-    note: `${EXCLUSIVE_NOTE}；本档 = 共享 + 无缝 + 全旁路，不请求独占。`,
+    note: `${EXCLUSIVE_NOTE}；本档 = 独占 + 无缝 + 全旁路，独占期间其它应用的声音会被系统切走或静音。`,
   },
 ];
 

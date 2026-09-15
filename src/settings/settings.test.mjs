@@ -91,22 +91,23 @@ test("1. 预设清单：日常/沉浸/发烧三档 + 各自映射 §15 键", () 
   assert.deepEqual(immersive.local, { "ui.reduced_motion": false, "wall.covers": "textures" });
 });
 
-test("2. 发烧=共享+无缝+全旁路，预设不自动请求独占（M4-d：exclusive 手动开放，§15 不默认开）", () => {
+test("2. 发烧=独占+无缝+全旁路（R8 用户裁定：预设为主动选择，默认值仍是 shared）", () => {
   const audiophile = applyPreset("audiophile");
   assert.ok(audiophile);
-  assert.equal(audiophile.ipc.find(([path]) => path === "output.mode")[1], "shared");
+  // R8（用户裁定）：发烧档改为请求独占（预设是用户主动选择，不违反"独占不默认开"）。
+  assert.equal(audiophile.ipc.find(([path]) => path === "output.mode")[1], "exclusive");
   assert.equal(audiophile.ipc.find(([path]) => path === "quality.gapless")[1], true);
   // 全旁路：fixed 音量 + 不重采样 + 无抖动移除 + 无淡化 + 无 ReplayGain
   assert.equal(audiophile.ipc.find(([path]) => path === "quality.volume_mode")[1], "fixed");
   assert.equal(audiophile.ipc.find(([path]) => path === "quality.resample")[1], "off");
   assert.equal(audiophile.ipc.find(([path]) => path === "quality.dedither")[1], false);
   assert.equal(audiophile.ipc.find(([path]) => path === "quality.crossfade_ms")[1], 0);
-  // 不写任何 exclusive 键/值（M4 排除）
-  assert.equal(audiophile.ipc.some(([path, value]) => path.includes("exclusive") || value === "exclusive"), false);
+  // R8（用户裁定）：发烧档**请求独占**（预设=用户主动选择，符合"默认值仍 shared"的纪律）。
+  assert.equal(audiophile.ipc.find(([path]) => path === "output.mode")[1], "exclusive");
   assert.ok(audiophile.note ?? PRESETS[2].note);
-  // M4-d：文案已翻为"已开放"；预设 note 明写本档不请求独占。
+  // 文案已翻为"已开放"；预设 note 明示本档请求独占且会静音其它应用。
   assert.match(PRESETS[2].note, /独占模式已开放/);
-  assert.match(PRESETS[2].note, /不请求独占/);
+  assert.match(PRESETS[2].note, /独占/);
   assert.match(EXCLUSIVE_NOTE, /独占模式已开放/);
 });
 
@@ -134,7 +135,8 @@ test("4. 预设切换→config.set 序列（applyPresetIpc 走 dot-path 通道�
   assert.equal(results.length, 7);
   assert.ok(results.every((entry) => entry.ok));
   assert.deepEqual(calls.map(([cmd]) => cmd), Array(7).fill("config.set"));
-  assert.deepEqual(calls[0][1], { path: "output.mode", value: "shared" });
+  // R8：发烧档首条下发 output.mode=exclusive。
+  assert.deepEqual(calls[0][1], { path: "output.mode", value: "exclusive" });
   assert.equal(store.preset(), "audiophile");
 });
 

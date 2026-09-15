@@ -971,8 +971,10 @@ button {
   pointer-events: none;
 }
 .terminal-modal {
-  width: 1260px;
-  height: 836px;
+  /* R8（用户实测反馈）：原 1260x836 + 9-12px 字号在 1080p 上偏小，21 岁用户都觉得费眼。
+     放大到 1480x940（不超过视口 92%），字号同步上调（见下方各规则）。 */
+  width: min(1480px, 92vw);
+  height: min(940px, 92vh);
   background: rgba(237, 235, 228, 0.97);
   box-shadow: 0 26px 95px #63513a20;
   border: 1px solid #f7f5ee;
@@ -1216,7 +1218,7 @@ button {
   right: 53px;
   display: flex;
   justify-content: space-between;
-  font-size: 9px;
+  font-size: 11px;
   letter-spacing: 1px;
   color: #8d8575;
 }
@@ -1261,7 +1263,7 @@ button {
   font-size: 33px;
 }
 .settings-intro {
-  font-size: 10px;
+  font-size: 13px;
   letter-spacing: 1px;
   color: #87806f;
   margin: 0 0 34px;
@@ -1276,9 +1278,9 @@ button {
 .settings-list .audio-toggle { padding: 20px 0 12px; border-bottom: 0; }
 .settings-list .audio-toggle span { margin-top: 7px; }
 .settings-list .audio-volume { justify-content: flex-start; gap: 12px; padding: 8px 0 18px; }
-.settings-list .audio-volume span { margin: 0; font-size: 10px; white-space: nowrap; }
+.settings-list .audio-volume span { margin: 0; font-size: 12px; white-space: nowrap; }
 .settings-list .audio-volume input { position: static; width: 100%; min-width: 60px; height: 22px; opacity: 1; accent-color: #565c46; }
-.audio-volume output { min-width: 36px; text-align: right; font-size: 10px; font-variant-numeric: tabular-nums; }
+.audio-volume output { min-width: 42px; text-align: right; font-size: 13px; font-variant-numeric: tabular-nums; }
 .audio-volume input:focus-visible { outline: 2px solid #a67d48; outline-offset: 4px; }
 .settings-list label {
   display: flex;
@@ -1290,7 +1292,7 @@ button {
   position: relative;
 }
 .settings-list strong {
-  font-size: 12px;
+  font-size: 15px;
   letter-spacing: 0.8px;
   font-weight: 400;
   display: block;
@@ -2216,9 +2218,9 @@ button {
 }
 /* M5d 设置：专辑墙封面三态（复用 theme-choices 按钮语言）。 */
 .cover-settings { padding: 16px 0; border-bottom: 1px solid #bdb8ad; display: flex; justify-content: space-between; align-items: center; gap: 20px; }
-.cover-settings strong { display: block; font-size: 14px; }
-.cover-settings > div:first-child > span { display: block; margin-top: 6px; font-size: 12px; color: #77756d; max-width: 46ch; }
+.cover-settings strong { display: block; font-size: 16px; }
+.cover-settings > div:first-child > span { display: block; margin-top: 6px; font-size: 13px; color: #77756d; max-width: 46ch; }
 .cover-settings .theme-choices { display: flex; gap: 6px; flex: none; }
-.cover-settings .theme-choices button { min-width: 76px; min-height: 42px; border: 1px solid #a6a49c; font-size: 13px; }
+.cover-settings .theme-choices button { min-width: 86px; min-height: 46px; border: 1px solid #a6a49c; font-size: 14px; }
 .cover-settings .theme-choices button[aria-pressed="true"] { background: #171713; color: #ece9e4; }
 .cover-degrade-reason { color: #a3611f !important; }
