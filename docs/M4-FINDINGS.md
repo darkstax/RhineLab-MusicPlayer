@@ -56,6 +56,15 @@ Windows 的 A2DP 传输链路会强制重编码（SBC/AAC），不存在位完�
 | 2 | 钉选消失直接 failed | 拔 DAC 后**静默 paused**（M4-PLAN 交互④要求"自动切系统默认续播"） | 解钉回默认并重试 |
 | 3 | 回退沿用 exclusive | 拔出后**仍显示独占**（用户现场原话："拔了之后…依然显示好像在独占"）——在未经授权的设备上抢独占，静音其它应用，违反 §15 | 回退一律用 shared |
 | 4 | 解钉丢失用户意图 | 插回 DAC 也**不会切回**原设备 | 新增 `hasPinnedIntent_` 保留意图 + `RestorePinnedIfAvailable` |
+| 5 | **回退态仍抢独占**（用户现场："拔掉 DAC 也正常播放 → 过了一会声音没了"） | 拔 DAC 后退到 Realtek，`ReopenForTrack` 仍按 `policy_.requested()=exclusive` 重开 → 在未授权设备抢独占（静音其它应用）；且 `MaybeRecoverExclusive` 每 5s 探测一次 → 反复重建链 → **听感中断** | 回退态（`hasPinnedIntent_ && !hasDeviceId_`）强制 shared；探测在回退态直接跳过，等钉选设备插回才探 |
+
+**修复后长时验证（43.7 分钟曲目，0:00 起播 → 拔 DAC → 采样 180s）**：
+
+| 指标 | 结果 |
+|---|---|
+| state | **90/90 全 `playing`**（零暂停） |
+| share | 8 次 `exclusive`（拔前）+ 82 次 `shared-event`（拔后），**只切换 1 次** |
+| 位置回跳 | **无**（11074 → 283959 ms，跨度与真实经过时间一致） |
 
 **修复原则（值得记住）**：独占是用户对**特定设备**的显式授权。
 设备变化 = 授权失效，必须降级 shared 重新征求（§15"独占绝不默认开"）。

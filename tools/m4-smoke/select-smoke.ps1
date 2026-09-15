@@ -53,6 +53,13 @@ if ($nonDefault.Count -ge 1) {
   # 会让"播到 2:30 拔 DAC"重开后回跳到 0:00）。切设备同样是重开路径，位置不得回退。
   Assert ($st1.result.position_ms -ge ($pos0 - 200)) `
     "重开位置不回退（$pos0 -> $($st1.result.position_ms)，R3-P1-1 回归守护）"
+  # R4（交互④现场）：回退态禁止独占——钉选设备消失后退到默认设备，必须降级 shared，
+  # 绝不在未授权设备上抢独占（否则静音其它应用 + 每 5s 探测重建链致听感中断）。
+  Send @{v=1;t='cmd';id='r-1';cmd='engine.state'}
+  $rt = (Wait-Reply 'r-1').result
+  Assert ($rt.negotiated.share -ne 'exclusive' -or $rt.negotiated -eq $null) `
+    "回退/切换后不抢独占（当前 share=$($rt.negotiated.share)，R4 回归守护）"
+
   # 切回跟随默认
   Send @{v=1;t='cmd';id='q-2';cmd='devices.select';data=@{id=''}}
   $o2 = Wait-Reply 'q-2'
