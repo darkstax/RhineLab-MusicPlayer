@@ -36,6 +36,15 @@ codebuddy ps            # 列出后台会话
 codebuddy logs review-m4
 ```
 
+**实测效力（本项目已验证，非纸面）**：cb 首轮复核在 M4/M5/M6 六笔修复中抓到
+**3 个 P1（其中 2 个是我自己修复时引入的）**，且全部附了可复现证据：
+- "独占下音量条静默失效"——追到 `player-store.ts:393` 恒定发 `hardware` + 我上轮把回落
+  改成了 `fixed(1.0)`；
+- "歌词闩锁无解锁点"——用 `node --test` 复现脚本证明"停止后重播同一曲歌词永久空白"；
+- "`default` 哨兵未翻译"——用真核心实测 `devices.select{id:"default"}` 必 `bad_request`。
+第二轮又抓到"共享模式音量跨设备重开静默丢失"（用本项目 vendored miniaudio 的 null 后端实测）。
+结论：**cb 无头模式在本项目是有效审查后端**，不是走过场。
+
 要点（实测确认）：
 - `-y`（`--dangerously-skip-permissions`）是 `-p` 的必需项，否则读写/命令会被拦。
 - `--effort` 支持 `minimal/low/medium/high/xhigh/max`；**本项目用 `max`**。
