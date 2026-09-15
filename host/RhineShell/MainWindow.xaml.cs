@@ -201,15 +201,17 @@ public partial class MainWindow : Window
     /// </summary>
     private void StartOwnedCore()
     {
-        var exe = _options.CoreExe is { Length: > 0 } coreExe
-            ? Path.GetFullPath(coreExe)
-            : Path.Combine(AppContext.BaseDirectory, "core", "RhineCoreStub.exe");
-        if (!File.Exists(exe))
+        // R5：决策抽到纯逻辑 CoreLaunch（可 WSL 单测）。默认选随包**真核心**，
+        // 修复前这里硬编码桩（RhineCoreStub.exe）→ 发行版从不使用真核心。
+        var decision = CoreLaunch.Resolve(
+            _options.CoreExe, AppContext.BaseDirectory, _options.SpawnedCoreOwned, File.Exists);
+        if (!decision.ShouldLaunch)
         {
-            Log.Error($"--spawn-core: core exe not found at {exe}");
+            Log.Warn($"core launch skipped: {decision.Reason}");
             return;
         }
 
+        var exe = decision.ExePath!;
         try
         {
             _ownedCore = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe)
@@ -218,11 +220,12 @@ public partial class MainWindow : Window
                 UseShellExecute = false,
                 CreateNoWindow = true,
             });
-            Log.Info($"spawned core pid={_ownedCore?.Id} exe={Path.GetFileName(exe)}");
+            Log.Info($"spawned core pid={_ownedCore?.Id} exe={Path.GetFileName(exe)} " +
+                     $"stub={decision.IsStub} reason=\"{decision.Reason}\"");
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException)
         {
-            Log.Error($"--spawn-core failed: {ex.Message}");
+            Log.Error($"core launch failed ({decision.Reason}): {ex.Message}");
         }
     }
 

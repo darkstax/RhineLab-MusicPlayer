@@ -94,7 +94,9 @@ try {
   }
 
   Write-Step 'shell (foreground)'
+  # R5：壳默认会自己拉起核心；本脚本已自行起核 → 显式声明不重复拉起。
   $shellArgs = @('--pipe', $Pipe)
+  if (-not $SpawnCore) { $shellArgs += '--no-spawn-core' }
   if ($SpawnCore) { $shellArgs += '--spawn-core' }
   if ($NoCore) { $shellArgs += '--no-core' }
   if ($DevTools) { $shellArgs += '--devtools' }

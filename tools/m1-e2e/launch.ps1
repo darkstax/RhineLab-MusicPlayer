@@ -9,7 +9,8 @@ Remove-Item -LiteralPath $env:APPDATA\RhineMusic\config.json -ErrorAction Silent
 $stub = Start-Process -FilePath $stubExe -ArgumentList @('--pipe','\\.\pipe\rhine-music.core.v1','--verbose','--halt-events','25') -RedirectStandardOutput $stubLog -PassThru -WindowStyle Hidden
 Start-Sleep -Milliseconds 700
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9223'
-$shell = Start-Process -FilePath $shellExe -ArgumentList @() -PassThru
+# R5：壳默认会拉起核心；本脚本自己起桩 → 显式声明不重复拉起。
+$shell = Start-Process -FilePath $shellExe -ArgumentList @('--no-spawn-core') -PassThru
 Write-Host "stub=$($stub.Id) shell=$($shell.Id)"
 Start-Sleep -Seconds 4
 Write-Host "stub alive=$(-not $stub.HasExited) shell alive=$(-not $shell.HasExited)"

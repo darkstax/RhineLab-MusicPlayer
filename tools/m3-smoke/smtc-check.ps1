@@ -114,7 +114,8 @@ $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$CdpPort"
 # 接管修正：壳不重定向 stdout 时会继承控制台句柄——外层 `pwsh -File` 会等子进程句柄关闭
 # 而不返回（无人值守挂死）。壳自身日志已落 shell.log，这里只隔离句柄。
 $shellOut = Join-Path $WorkDir 'm3-smtc-shell.out'
-$shell = Start-Process -FilePath $shellExe -ArgumentList @('--pipe', $pipe, '--dist', $WebDist) `
+# R5：本脚本自己起核心 → 显式声明不重复拉起。
+$shell = Start-Process -FilePath $shellExe -ArgumentList @('--pipe', $pipe, '--dist', $WebDist, '--no-spawn-core') `
   -WorkingDirectory $WorkDir -PassThru -WindowStyle Hidden `
   -RedirectStandardOutput $shellOut -RedirectStandardError (Join-Path $WorkDir 'm3-smtc-shell.err')
 Write-Host "shell pid=$($shell.Id) core pid=$($script:coreProc.Id)"

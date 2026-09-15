@@ -278,8 +278,9 @@ if (-not $suiteFailed -and $Level -eq 'full') {
   $core = Start-Process -FilePath $coreExe -ArgumentList @('--pipe', $pipe) -PassThru -WindowStyle Hidden `
     -RedirectStandardOutput "$suite.live-core.log"
   Start-Sleep -Milliseconds 900
+  # R5：本段故意用外部真核心验重连/律动 → 显式声明不重复拉起。
   $shell = Start-Process -FilePath $shellExe -ArgumentList @(
-    '--pipe', $pipe, '--remote-debug-port', "$cdpPort", '--dist', $webDist) `
+    '--pipe', $pipe, '--remote-debug-port', "$cdpPort", '--dist', $webDist, '--no-spawn-core') `
     -WorkingDirectory $work -PassThru -WindowStyle Hidden `
     -RedirectStandardOutput "$suite.live-shell.out" -RedirectStandardError "$suite.live-shell.err"
   Start-Sleep -Seconds 8
@@ -317,6 +318,29 @@ if (-not $suiteFailed -and $Level -eq 'full') {
 
   Stop-Process -Id $shell.Id -Force -ErrorAction SilentlyContinue
   Stop-Process -Id $core.Id -Force -ErrorAction SilentlyContinue
+
+  # —— R5 回归守护：零参数启动壳必须**自动拉起核心**（发行版默认可播放）——
+  # 覆盖缺陷：发行版双击 RhineShell.exe 时无核心在跑（用户完全无声，M6-F 验收盲区）。
+  # 本布局 dist-host/core 只有桩（真核心打包时才拷入）→ 断言"自动拉起 + 握手成功"。
+  $t = [System.Diagnostics.Stopwatch]::StartNew()
+  $logPath = "$env:LOCALAPPDATA\RhineMusic\logs\shell.log"
+  $logBefore = if (Test-Path $logPath) { (Get-Item $logPath).Length } else { 0 }
+  Get-Process RhineShell,RhineCore,RhineCoreStub -ErrorAction SilentlyContinue | Stop-Process -Force
+  Start-Sleep -Milliseconds 700
+  $autoShell = Start-Process -FilePath $shellExe -WorkingDirectory $work -PassThru -WindowStyle Hidden `
+    -RedirectStandardOutput "$suite.launch.out" -RedirectStandardError "$suite.launch.err"
+  Start-Sleep -Seconds 14
+  $autoCore = @(Get-Process RhineCore,RhineCoreStub -ErrorAction SilentlyContinue)
+  $newLog = ''
+  if (Test-Path $logPath) {
+    $fs = [IO.File]::Open($logPath,'Open','Read','ReadWrite'); $fs.Seek($logBefore,'Begin') | Out-Null
+    $sr = New-Object IO.StreamReader($fs); $newLog = $sr.ReadToEnd(); $sr.Close(); $fs.Close()
+  }
+  $launchOk = ($autoCore.Count -ge 1) -and ($newLog -match 'spawned core pid=') -and ($newLog -notmatch 'core connection failed')
+  Add-Result 'packaged-launch' $launchOk $t.Elapsed.TotalSeconds `
+    "core=$($autoCore.Count) spawned=$(if($newLog -match 'spawned core pid='){'yes'}else{'NO'}) connFailed=$(if($newLog -match 'core connection failed'){'yes'}else{'no'})"
+  Get-Process RhineShell,RhineCore,RhineCoreStub -ErrorAction SilentlyContinue | Stop-Process -Force
+  Start-Sleep -Milliseconds 400
 }
 
 # —— 汇总 + 缓存写入 ——

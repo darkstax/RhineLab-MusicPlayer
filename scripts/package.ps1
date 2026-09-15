@@ -65,11 +65,19 @@ foreach ($f in 'LICENSE', 'THIRD-PARTY-NOTICES.md', 'README.md') {
   $src = Join-Path $repo $f
   if (Test-Path -LiteralPath $src) { Copy-Item -LiteralPath $src -Destination $stage -Force }
 }
+# R5 产物断言：核心必须随包（防 robocopy 过滤把核心漏掉 → 用户无声）
+foreach ($must in @('core\RhineCore.exe', 'core\RhineCoreStub.exe')) {
+  $p = Join-Path $stage $must
+  if (-not (Test-Path -LiteralPath $p)) { throw "staging 缺核心产物：$must（发行版将无声）" }
+}
+Write-Host "  core artifacts ok (RhineCore.exe + RhineCoreStub.exe)" -ForegroundColor Green
+
 # 便携版启动说明（zip 用户第一眼看到的东西）
 @"
 Rhine Lab Music Player $ver (portable)
 --------------------------------------
-双击 RhineShell.exe 启动。
+双击 RhineShell.exe 启动（音频核心 core\RhineCore.exe 由壳自动拉起，退出壳一并结束）。
+若杀软隔离了 core\RhineCore.exe，会出现"能开界面但无法播放"——请加白名单。
 前置：.NET 10 Desktop Runtime 与 WebView2 Runtime（Win11 通常自带；缺失请到官网安装）。
 曲库：设置 → 库 → 添加音乐目录。
 "@ | Set-Content -LiteralPath (Join-Path $stage 'README-portable.txt') -Encoding UTF8

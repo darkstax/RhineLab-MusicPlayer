@@ -25,12 +25,20 @@ public sealed class ShellOptions
     /// <summary>启动即打开 DevTools（F12 总是可用）。</summary>
     public bool OpenDevTools { get; init; }
 
-    /// <summary>退出时同时结束本次由壳拉起的核心进程（仅 <c>--spawn-core</c> 模式下有意义）。</summary>
+    /// <summary>
+    /// 退出时同时结束本次由壳拉起的核心进程。
+    /// R5：本开关语义反转——**默认允许拉起**（发行版双击即有声），
+    /// <c>--no-spawn-core</c> 才关闭（外部核心场景：开发脚本/调试自己起核）。
+    /// <c>--spawn-core</c> 保留为幂等兼容（旧脚本传了也不冲突）。
+    /// </summary>
     public bool SpawnedCoreOwned { get; init; }
 
-    /// <summary>任务书 M2 约束 8：<c>--core-exe &lt;path&gt;</c> 改 <c>--spawn-core</c> 拉起的核心
-    /// 可执行文件（如 dist-host\core\RhineCore.exe 真音频核心）；缺省仍为随包桩
-    /// <c>core\RhineCoreStub.exe</c>，壳其余行为零改动。</summary>
+    /// <summary>
+    /// <c>--core-exe &lt;path&gt;</c>：显式指定要拉起的核心可执行文件。
+    /// R5：缺省不再是硬编码的桩——改为按「显式值 &gt; <c>core\RhineCore.exe</c> &gt;
+    /// <c>core\RhineCoreStub.exe</c>」探测（见 <see cref="CoreLaunch.Resolve"/>）。
+    /// 修复前缺省写死桩，导致发行版从不使用随包的真核心。
+    /// </summary>
     public string? CoreExe { get; init; }
 
     /// <summary>任务书 B4：<c>--dev</c> 加载 vite dev 端口代替 app.rhine.local，窗口标题加 [dev]，
@@ -84,7 +92,8 @@ public sealed class ShellOptions
             PipeName = pipe,
             CoreDisabled = args.Contains("--no-core"),
             OpenDevTools = args.Contains("--devtools"),
-            SpawnedCoreOwned = args.Contains("--spawn-core"),
+            // R5：默认拉起核心（发行版双击即有声）；--no-spawn-core 优先于 --spawn-core。
+            SpawnedCoreOwned = !args.Contains("--no-spawn-core"),
             CoreExe = Value(args, "--core-exe"),
             Dev = args.Contains("--dev"),
             RemoteDebugPort = int.TryParse(Value(args, "--remote-debug-port"), out var port) && port is > 0 and < 65536

@@ -21,6 +21,8 @@
   -->
   <ItemGroup>
     <Compile Include="..\RhineShell\Taskbar\TaskbarWriter.cs" Link="TaskbarWriter.cs" />
+    <!-- R5：核心启动决策（纯逻辑，零 WPF 依赖）——发行版默认选真核心的回归守护。 -->
+    <Compile Include="..\RhineShell\Hosting\CoreLaunch.cs" Link="CoreLaunch.cs" />
   </ItemGroup>
 
   <ItemGroup>
