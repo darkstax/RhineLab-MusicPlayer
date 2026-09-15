@@ -1506,10 +1506,23 @@ export class ArchiveScene {
       0,
     );
     // 封面平面跟随选中卡的 position/rotation（scene 直挂，见 load() 处注释）。
+    //
+    // R6-fix4（用户实测"封面专辑严重下沉"）：原实现 `position.copy(this.model.position)`
+    // 会**整矢量覆盖**，把卡片的中心基准偏移 (0, 1.85, 0) 一并抹掉 → 封面中心落到卡片
+    // 基准点（底部）而非卡面中心，视觉上整张封面下沉约一个卡高的一半。
+    // 本文件另两处同源基准可证：(0,1.85,0) 才是卡面中心——`:939 localToWorld(0,1.85,0)`、
+    // `:1646 详情相机瞄准 model.position + (0,1.85,0)`、`:548 封面初始化 (0,1.85,0.24)`。
+    // 修法：先 copy 再叠加该偏移，与初始化值保持一致。
     if (this.coverMesh && this.coverHolding) {
-      this.coverMesh.position.copy(this.model.position);
-      this.coverMesh.rotation.copy(this.model.rotation);
-      this.coverMesh.translateZ(0.24);
+      // 局部坐标 (0, 1.85, 0) 先经 model 的世界矩阵变换（含 lift/rail/倾斜 rotation），
+      // 再沿**世界 Z 之外**的正确法线外推 0.24 —— 直接 copy 位置分量做不到这一点
+      // （model 有 rotation.y≈π/2 与倾斜，世界坐标的 y+1.85 不等于卡面局部 y+1.85）。
+      // localToWorld 依赖 model.matrixWorld —— 渲染循环里 model.position/rotation 刚被 set，
+      // 矩阵还是上一帧的，必须先刷新（否则封面滞后一帧 / 落在旧位置）。
+      this.model.updateMatrixWorld(true);
+      this.coverMesh.position.copy(this.model.localToWorld(new THREE.Vector3(0, 1.85, 0)));
+      this.coverMesh.quaternion.copy(this.model.quaternion);
+      this.coverMesh.translateZ(0.24);     // 局部 Z 向 = 卡面法线
       this.coverMesh.visible = this.coverVisible();
     } else if (this.coverMesh) this.coverMesh.visible = false;
     // Measured from frame 787: X edge (382,-204), adjacent row (78,38).
@@ -1794,6 +1807,21 @@ export class ArchiveScene {
       drawCalls: this.renderer.info.render.calls,
       superPerformance: this.superPerformance,
       coverMapped: this.coverTexture !== null,
+      // R6-fix4 验收探针：封面平面中心的**屏幕投影**（世界坐标而非 model 局部——
+      // 封面 mesh 是 scene 直挂，带自己的 y+1.85 基准偏移）。守护脚本据此断言
+      // 封面中心与卡面中心（labelTop/Bottom 的中值）对齐，防"封面下沉"回归。
+      coverCenter: this.coverMesh
+        ? (() => {
+            const p = this.coverMesh!.position.clone().project(this.camera);
+            return [
+              Math.round((p.x + 1) * this.container.clientWidth / 2),
+              Math.round((1 - p.y) * this.container.clientHeight / 2),
+            ];
+          })()
+        : null,
+      // 卡面中心 = 局部 (0, 1.85, 0)——与 `:939 dragProjection` 同源基准（该函数
+      // 用同一常量做拖拽投影的中心点），是卡片中心的权威定义。
+      cardCenter: project(0, 1.85, 0),
       coverKey: this.coverKeyInternal,
       rendererTextures: this.renderer.info.memory.textures,
       presentation: this.presence,
