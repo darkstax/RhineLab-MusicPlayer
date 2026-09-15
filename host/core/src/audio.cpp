@@ -368,7 +368,8 @@ bool AudioBackend::device_running() const {
 // M4-c devices.select：钉选设备并立即重开（调用方保证安全点）。id 空 = 回默认。
 bool AudioBackend::SelectDevice(const std::string& endpointId, std::string& error) {
     if (endpointId.empty()) {
-        hasDeviceId_ = false;  // 跟随系统默认
+        hasDeviceId_ = false;      // 跟随系统默认
+        hasPinnedIntent_ = false;  // 用户主动改选默认 → 清除钉选意图
         return true;
     }
     // 在枚举表里找该 id（校验存在性；找不到 = bad_request 交上层）。
@@ -383,12 +384,32 @@ bool AudioBackend::SelectDevice(const std::string& endpointId, std::string& erro
         if (wcscmp(pb[i].id.wasapi, want.c_str()) == 0) {
             lastDeviceId_ = pb[i].id;
             hasDeviceId_ = true;
+            pinnedDeviceId_ = pb[i].id;   // 记住用户意图（拔出后可据此插回切回）
+            hasPinnedIntent_ = true;
             deviceFacts_.name = pb[i].name;
             return true;
         }
     }
     error = "unknown device id";
     return false;
+}
+
+// R4（交互④）：钉选设备插回 → 恢复钉选（用户意图 hasPinnedIntent_ 在拔出时被保留）。
+// 每次调用重新枚举，设备在表里且 id 匹配才恢复；返回 true 表示"从跟随默认切回钉选"。
+bool AudioBackend::RestorePinnedIfAvailable() {
+    if (!hasPinnedIntent_ || hasDeviceId_) return false;  // 无意图 / 已钉着
+    ma_device_info* pb = nullptr; ma_uint32 pbc = 0;
+    ma_device_info* cp = nullptr; ma_uint32 cpc = 0;
+    if (ma_context_get_devices(&context_, &pb, &pbc, &cp, &cpc) != MA_SUCCESS) return false;
+    for (ma_uint32 i = 0; i < pbc; ++i) {
+        if (ma_device_id_equal(&pb[i].id, &pinnedDeviceId_)) {
+            lastDeviceId_ = pb[i].id;
+            hasDeviceId_ = true;
+            deviceFacts_.name = pb[i].name;
+            return true;
+        }
+    }
+    return false;  // 还没插回
 }
 
 // M4-a 核心：播放期按源格式重开设备（独占/换率/降级）。调用方保证安全点（设备已停、
@@ -448,7 +469,7 @@ bool AudioBackend::ReopenForTrack(ma_uint32 srcRate, std::string& why) {
         // 但**不得沿用 exclusive**：独占是用户对**特定设备**的显式授权，回退到另一台
         // 未经授权的设备仍抢独占会静音其它应用（违反 §15"独占绝不默认开"，用户现场观察到
         // "拔出后短暂异常，然后仍显示独占"就是这个 bug）。回退一律用 shared。
-        hasDeviceId_ = false;
+        hasDeviceId_ = false;  // 临时解钉（hasPinnedIntent_ 保留：设备插回可切回）
         OpenAttempt fallback = base;
         fallback.share = OutputMode::Shared;
         std::string fallbackErr;

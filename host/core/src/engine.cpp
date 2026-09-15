@@ -339,6 +339,9 @@ std::vector<std::pair<std::string, proto::Json>> Engine::MaybeRecoverExclusive()
     const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
     if (!audio_.policy().ProbeDue(nowMs)) return extra;
+    // R4（交互④后半句"插回 → 切回"）：钉选设备插回时先恢复钉选（拔出时只临时解钉，
+    // 用户意图保留着），再走下面的重建（会按钉选设备重开）。
+    const bool repinned = audio_.RestorePinnedIfAvailable();
     const bool wasExclusive = audio_.exclusive();
     const std::int64_t frozenMs = PositionMs();
     std::string error;
@@ -349,6 +352,9 @@ std::vector<std::pair<std::string, proto::Json>> Engine::MaybeRecoverExclusive()
         // 升回成功：state 刷新（share/badges 变了）。
         extra.emplace_back("state", StatePayload());
         extra.emplace_back("position", PositionPayload());
+    } else if (repinned) {
+        // 钉选设备已插回并切回：即使 share 没变也要刷 state（设备名变了）。
+        extra.emplace_back("state", StatePayload());
     }
     return extra;
 }

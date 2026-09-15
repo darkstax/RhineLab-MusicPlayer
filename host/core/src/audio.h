@@ -75,6 +75,8 @@ public:
     bool device_running() const;
     // M4-c devices.select：钉选设备（id=MMDevice.ID；空串=回到跟随系统默认）。
     bool SelectDevice(const std::string& endpointId, std::string& error);
+    /** R4（交互④）：钉选设备插回后恢复钉选（返回 true = 已恢复；调用方据此重建链）。 */
+    bool RestorePinnedIfAvailable();
 
     // ---- M4 输出策略（协议 v1.6 output.mode；协商状态机在 OutputPolicy，纯逻辑单测）----
     void ConfigureOutput(const OutputPolicyConfig& config) { policy_.UpdateConfig(config); }
@@ -235,6 +237,11 @@ private:
     // （WASAPI 用 wchar wasapi[64]），必须整结构体拷贝 + ma_device_id_equal 比较。
     ma_device_id lastDeviceId_{};
     bool hasDeviceId_ = false;   // false = 跟随系统默认（pDeviceID=nullptr）
+    // R4（交互④）：**用户钉选意图**（与"当前是否真钉着"分离）。钉选设备拔出时
+    // hasDeviceId_ 会临时解钉（回默认续播），但用户的意图要留着——设备插回后
+    // MaybeRecoverExclusive 依据它切回原设备，否则"插回 → 切回"这半句失效。
+    ma_device_id pinnedDeviceId_{};
+    bool hasPinnedIntent_ = false;
     std::atomic<bool> deviceEventPending_{false};  // rerouted/lost 旗（会话线程消费）
     std::atomic<bool> deviceLostSeen_{false};      // 写路径报错记录（device_running 佐证）
     ma_uint32 mixRate_ = 48000; // 共享混音率（首次枚举缓存）
