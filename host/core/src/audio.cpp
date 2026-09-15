@@ -216,8 +216,10 @@ bool AudioBackend::CacheDefaultEndpoint() {
     for (ma_uint32 i = 0; i < playbackCount; ++i) {
         if (!playbackInfos[i].isDefault) continue;
         deviceFacts_.name = playbackInfos[i].name;
-        lastDeviceId_ = playbackInfos[i].id;
-        hasDeviceId_ = true;
+        // P1-2：跟随默认时**不钉 id**（hasDeviceId_ 保持 false → OpenDeviceKind 传
+        // pDeviceID=nullptr → miniaudio 才开 allowPlaybackAutoStreamRouting 并注册
+        // IMMNotificationClient；钉死 id 会让热插拔自动跟随与失效通知双双失效）。
+        // lastDeviceId_ 仅在 devices.select 显式钉选时置位（见 SelectDevice）。
         for (ma_uint32 f = 0; f < playbackInfos[i].nativeDataFormatCount; ++f) {
             const auto& df = playbackInfos[i].nativeDataFormats[f];
             if (df.channels != 2 || df.sampleRate < 8000) continue;
@@ -251,7 +253,8 @@ bool AudioBackend::ExclusiveCapable(ma_uint32 rate) const {
 // 设备打开内核（context 必须已存在）。exclusive：s32 容器 @ 源率（位完美路，无混音器）；
 // shared：混音格式 @ 混音率。bufferMs→periodSizeInMilliseconds（OutputPolicy 已钳好）。
 bool AudioBackend::OpenDeviceKind(bool exclusive, ma_uint32 rate, int bufferMs,
-                                  std::string& error, const ma_device_id* deviceId) {
+                                  std::string& error, const ma_device_id* deviceId,
+                                  ma_result* rcOut) {
     ma_device_config config = ma_device_config_init(ma_device_type_playback);
     // M4-c：deviceId=nullptr → 跟随系统默认（miniaudio 内置自动重路由，共享模式）；
     // 非空 → 钉选该端点（devices.select 显式指定，或 CacheDefaultEndpoint 缓存的默认）。
@@ -274,8 +277,19 @@ bool AudioBackend::OpenDeviceKind(bool exclusive, ma_uint32 rate, int bufferMs,
     config.pUserData = this;
 
     deviceLostSeen_.store(false, std::memory_order_relaxed);
-    if (ma_device_init(&context_, &config, &device_) != MA_SUCCESS) {
-        error = exclusive ? "exclusive ma_device_init failed" : "shared ma_device_init failed";
+    const ma_result initRc = ma_device_init(&context_, &config, &device_);
+    if (rcOut != nullptr) *rcOut = initRc;
+    if (initRc != MA_SUCCESS) {
+        error = (exclusive ? "exclusive ma_device_init failed rc=" : "shared ma_device_init failed rc=") +
+                std::to_string((int)initRc);
+        return false;
+    }
+    // P2-4：独占路径 miniaudio 用 PKEY_AudioEngine_DeviceFormat 原样开，可能给非 s32
+    // （原生 s16 端点）；本实现独占回调按 ma_int32* 写 → 格式不符必越界。校验后拒开。
+    if (exclusive && device_.playback.format != ma_format_s32) {
+        ma_device_uninit(&device_);
+        error = "exclusive granted non-s32 format (native " + std::to_string((int)device_.playback.format) + ")";
+        if (rcOut != nullptr) *rcOut = MA_FORMAT_NOT_SUPPORTED;
         return false;
     }
     deviceFacts_.opened = true;
@@ -373,16 +387,26 @@ bool AudioBackend::ReopenForTrack(ma_uint32 srcRate, std::string& why) {
         [this, srcRate](const OpenAttempt& a) -> OpenResult {
             OpenResult r;
             std::string err;
+            ma_result rc = MA_SUCCESS;
             const ma_device_id* pin = hasDeviceId_ ? &lastDeviceId_ : nullptr;
             if (OpenDeviceKind(a.share == OutputMode::Exclusive,
                                a.share == OutputMode::Exclusive ? srcRate : mixRate_,
-                               a.bufferMs, err, pin)) {
+                               a.bufferMs, err, pin, &rc)) {
                 r.ok = true;
                 return r;
             }
+            // P1-3：真错误分类（不再一律伪造 BufferTooSmall）。
+            // miniaudio 独占失败映射：MA_SHARE_MODE_NOT_SUPPORTED / MA_FORMAT_NOT_SUPPORTED /
+            // MA_BUSY(DEVICE_IN_USE) / MA_ACCESS_DENIED；无"设备最小 period"专码 →
+            // BufferTooSmall 只在独占且 rc 属缓冲/尺寸族时用，其余如实 Unknown/Format/Busy。
             if (a.share == OutputMode::Exclusive) {
-                r.fail = FailKind::BufferTooSmall;
-                r.minPeriodMs = a.bufferMs * 2;  // 抬一档重试（Negotiate 对齐阶梯）
+                if (rc == MA_BUSY) r.fail = FailKind::Busy;
+                else if (rc == MA_SHARE_MODE_NOT_SUPPORTED || rc == MA_FORMAT_NOT_SUPPORTED ||
+                         rc == MA_ACCESS_DENIED || rc < 0)
+                    // miniaudio 把 WASAPI HRESULT 原样透传（S_FALSE/负 HRESULT 族）：
+                    // 任何非具名失败码都归"格式/能力不支持"（保守，抬升重试不再触发）。
+                    r.fail = FailKind::FormatUnsupported;
+                else r.fail = FailKind::Unknown;
             } else {
                 r.fail = FailKind::Unknown;
             }
@@ -791,7 +815,14 @@ proto::Json AudioBackend::Negotiated() const {
     //   其余（float/fixed）→ 看软件增益。integer 属 M4（engine 层 not_implemented）。
     const bool hwPath = volumeMode_ == "hardware" && hardwareApplied_.load(std::memory_order_relaxed);
     const float gain = softwareGain_.load(std::memory_order_relaxed);
-    const bool volumePassthrough = hwPath ? hardwareVolume_ >= 0.999999f : gain >= 0.999999f;
+    // 审查 P1-4 纵深：miniaudio 的 masterVolumeFactor 在回调后还会乘一遍输出帧
+    // （共享/独占都乘）——任何非 1 值都破坏直通，与 volumeMode_ 无关。
+    float master = 1.0f;
+    if (ma_device_get_master_volume(const_cast<ma_device*>(&device_), &master) != MA_SUCCESS) {
+        master = 1.0f;  // 查询失败按默认直通（保守：不误判降级）
+    }
+    const bool volumePassthrough =
+        (hwPath ? hardwareVolume_ >= 0.999999f : gain >= 0.999999f) && master >= 0.999999f;
 
     proto::Json chain = proto::Json::array();
     // 源后端是否整型（24bit 红线取证：FLAC/WAV 整型直通 s32 容器；MP3 本质 float，

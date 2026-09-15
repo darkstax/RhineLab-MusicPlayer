@@ -169,7 +169,7 @@ private:
     proto::Json DeviceExclusiveJson(const ma_device_info& info,
                                     ma_uint32 formatCap);  // 三态：实况/探测表/null(未知)
     bool OpenDeviceKind(bool exclusive, ma_uint32 rate, int bufferMs, std::string& error,
-                        const ma_device_id* deviceId = nullptr);
+                        const ma_device_id* deviceId = nullptr, ma_result* rcOut = nullptr);
     void CloseDeviceOnly();  // 只 uninit device（context 保留）
     static void StaticNotification(const ma_device_notification* n);
     void OnNotification(const ma_device_notification* n);

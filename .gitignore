@@ -33,3 +33,5 @@ dist-host/
 host/core/build/
 dist/
 dist-release/
+tools/output-policy-test/output-policy-test
+tools/ring-equiv/ring-equiv

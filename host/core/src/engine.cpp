@@ -448,12 +448,20 @@ CommandOutcome Engine::SetVolume(const std::string& mode, std::optional<double> 
     double target = value.has_value() ? *value : volume_;
     if (target < 0.0) target = 0.0;
     if (target > 1.0) target = 1.0;
-    volumeMode_ = mode;
-    volume_ = mode == "fixed" ? 1.0 : target;
+    // P1-4（审查）：独占下 miniaudio 的 master volume 实为应用侧软件增益，
+    // 记 hardware-volume 会谎报直通路径——核心侧真回落 fixed（UI 提示只是预告，
+    // 这里才是落地；位完美前提 = 音量 100% 直通）。
+    std::string effectiveMode = mode;
+    if (effectiveMode == "hardware" && audio_.exclusive()) {
+        effectiveMode = "fixed";
+        target = 1.0;
+    }
+    volumeMode_ = effectiveMode;
+    volume_ = effectiveMode == "fixed" ? 1.0 : target;
     // 两路增益（约束 5 接口均在位）：fixed = 全 100% 直通；float = 软件增益；
     // hardware = 端点会话音量（软件路锁 1.0，避免双重衰减；失败则退回软件路）。
-    if (mode == "hardware") {
-        audio_.SetVolumeMode(mode);
+    if (effectiveMode == "hardware") {
+        audio_.SetVolumeMode(effectiveMode);
         audio_.SetSoftwareGain(1.0f);
         if (!audio_.SetEndpointVolume(static_cast<float>(volume_))) {
             audio_.SetSoftwareGain(static_cast<float>(volume_));  // 回退：端点不可用
