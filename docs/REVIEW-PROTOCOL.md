@@ -18,6 +18,31 @@
 | 范围 | **以改动 diff 及直接受其影响的调用链为边界**。除非被明确要求全量审计，diff 之外的存量问题不开单 |
 | 工期 | 单轮建议 ≤ 40 分钟；超时先交已确证部分（宁可少而准） |
 
+### 执行后端：reviewer 一律走 CodeBuddy 无头模式（09-15 用户裁定）
+
+pi 的 subagent 在"长任务书 + 大仓库审查"下反复 503（上游流截断），**本项目 review 型任务改走
+CodeBuddy Code 无头模式**（`codebuddy -p`，v2.151.0 已装，模型 `deepseek-v4.1-flash` + `--effort max`）：
+
+```bash
+# 标准调用（任务书走 stdin，规避长中文 argv 问题；-y 免交互授权）
+cd /home/starl/ai-code/RhineLab-MusicPlayer
+codebuddy -p -y --model deepseek-v4.1-flash --effort max \
+  --allowedTools "Bash,Read,Grep,Glob" < docs/REVIEW-PROTOCOL.md
+
+# 后台跑（长任务，不占前台；用 ps/logs 跟踪）
+codebuddy -p -y --bg --name review-m4 --model deepseek-v4.1-flash --effort max \
+  --allowedTools "Bash,Read,Grep,Glob" < docs/REVIEW-PROTOCOL.md
+codebuddy ps            # 列出后台会话
+codebuddy logs review-m4
+```
+
+要点（实测确认）：
+- `-y`（`--dangerously-skip-permissions`）是 `-p` 的必需项，否则读写/命令会被拦。
+- `--effort` 支持 `minimal/low/medium/high/xhigh/max`；**本项目用 `max`**。
+- `--output-format json|stream-json` 可程序化消费；`--json-schema` 可强制结构化输出。
+- 用 `--allowedTools` 限权（reviewer 只需读类工具，**不要给 Edit/Write**，从机制上保证只读）。
+- 长任务书用 stdin 管道喂入，避免 argv 的 UTF-8 与长度限制。
+
 ### 信任边界（本项目属性，直接决定什么算缺陷）
 
 这是**本地单机桌面应用**：

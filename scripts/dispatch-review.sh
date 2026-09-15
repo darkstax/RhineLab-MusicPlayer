@@ -1,48 +1,64 @@
 #!/usr/bin/env bash
-# 复核派单：把 docs/REVIEW-PROTOCOL.md 的任务书交给一个独立 agent 执行。
+# 复核派单：走 CodeBuddy 无头模式（09-15 用户裁定——reviewer 一律用 cb，避开 pi subagent 长任务 503）。
 #
 # 用法：
-#   bash scripts/dispatch-review.sh                 # 前台跑（看输出）
-#   bash scripts/dispatch-review.sh bg              # 后台跑（pi-bg 跟踪）
-#   AGENT=reviewer-qwen bash scripts/dispatch-review.sh
+#   bash scripts/dispatch-review.sh              # 前台（看完整输出）
+#   bash scripts/dispatch-review.sh bg           # 后台（codebuddy --bg，用 ps/logs 跟踪）
+#   bash scripts/dispatch-review.sh fg > out.md  # 前台并落盘报告
 #
-# 说明：
-#   - 任务书很长（含中文），**不能**直接塞进 pi -p 的 argv（实测 invalid UTF-8），
-#     所以一律落盘到任务目录，派单时只传"读这个文件"的短指令。
-#   - 复核阶段禁止并发跑 m-verify（抢镜像与命名管道），任务书 §5 已写明。
+# 环境变量：
+#   MODEL  默认 deepseek-v4.1-flash      EFFORT 默认 max
+#   OUT    报告落盘路径                  NAME   后台会话名（bg 模式）
+#   EXTRA_PROMPT  追加到任务书的额外指令（如"只审 M4-c"）
+#
+# 设计要点：
+#   - 任务书从 stdin 喂入（长中文任务书不进 argv，规避 UTF-8 / 长度限制）。
+#   - --allowedTools 只给读类工具：reviewer 从机制上无法改文件（不是靠自觉）。
+#   - -y 是 -p 的必需项，否则文件/命令操作会被拦。
 set -euo pipefail
 
 REPO=/home/starl/ai-code/RhineLab-MusicPlayer
-AGENT=${AGENT:-reviewer}
-TASK_FILE=$REPO/docs/REVIEW-PROTOCOL.md
+MODEL=${MODEL:-deepseek-v4.1-flash}
+EFFORT=${EFFORT:-max}
+MODE=${1:-fg}
 STAMP=$(date +%Y%m%d-%H%M%S)
-OUT_DIR=${OUT_DIR:-/tmp/review-$STAMP}
-mkdir -p "$OUT_DIR"
+OUT=${OUT:-/tmp/review-$STAMP.md}
+NAME=${NAME:-review-$STAMP}
+TASK_SRC=$REPO/docs/REVIEW-PROTOCOL.md
 
-# 落盘任务书副本 + 出处锚点（含 HEAD，便于报告里标注基线）
+[[ -f "$TASK_SRC" ]] || { echo "找不到任务书：$TASK_SRC" >&2; exit 1; }
+
+TASK_FILE=/tmp/review-task-$STAMP.md
 {
-  echo "# 复核任务书（由 $TASK_FILE 导出）"
+  echo "# 复核任务（本文件由 $TASK_SRC 导出）"
   echo
   echo "- 仓库：$REPO"
   echo "- 基线 HEAD：$(git -C "$REPO" log -1 --format='%h %s')"
-  echo "- 任务书要求：读 §1–§6 的通用协议，然后执行 §7 的本轮任务。"
-  echo "- 输出报告到：$OUT_DIR/report.md，并在回复里给 P0/P1 摘要 + 总判定。"
+  echo "- 要求：读 §1–§6 通用协议，执行 §7 本轮任务；按 §4 格式输出。"
+  echo "- 报告落盘到：$OUT（若你能写文件则写入该路径，否则直接打印完整报告）"
   echo
+  [[ -n "${EXTRA_PROMPT:-}" ]] && { echo "## 本次追加指令"; echo; echo "$EXTRA_PROMPT"; echo; }
   echo "---"
   echo
-  cat "$TASK_FILE"
-} > "$OUT_DIR/task.md"
+  cat "$TASK_SRC"
+} > "$TASK_FILE"
 
-PROMPT="读取 $OUT_DIR/task.md 并严格执行（只读复核：不改文件、不提交）。按任务书 §4 的格式把完整报告写入 $OUT_DIR/report.md，回复中给出 P0/P1 摘要与总判定。仓库 $REPO。"
+echo "任务书：$TASK_FILE ($(wc -l < "$TASK_FILE") 行)" >&2
+echo "模型：  $MODEL / effort=$EFFORT" >&2
+echo "报告：  $OUT" >&2
+echo >&2
 
-echo "任务书已落盘：$OUT_DIR/task.md ($(wc -l < "$OUT_DIR/task.md") 行)"
-echo "报告将写入：  $OUT_DIR/report.md"
-echo "agent：        $AGENT"
-echo
+cd "$REPO"
+# reviewer 只读：不给 Edit/Write/NotebookEdit
+ALLOWED="Bash,Read,Grep,Glob,LS"
 
-if [[ "${1:-}" == "bg" ]]; then
-  ~/.pi/agent/bin/pi-bg submit -n "review-$STAMP" -d "$REPO" "$OUT_DIR/task.md"
-  echo "已后台派单，跟踪：pi-bg status review-$STAMP / pi-bg logs review-$STAMP"
+if [[ "$MODE" == "bg" ]]; then
+  codebuddy -p -y --bg --name "$NAME" \
+    --model "$MODEL" --effort "$EFFORT" --allowedTools "$ALLOWED" \
+    < "$TASK_FILE"
+  echo "已后台派单：codebuddy ps / codebuddy logs $NAME" >&2
 else
-  exec pi --agent "$AGENT" -p "$PROMPT"
+  codebuddy -p -y \
+    --model "$MODEL" --effort "$EFFORT" --allowedTools "$ALLOWED" \
+    < "$TASK_FILE" | tee "$OUT"
 fi
