@@ -296,7 +296,9 @@ export const GROUPS: readonly GroupDef[] = [
       { path: "output.buffer_ms", kind: "select", label: "缓冲时长", options: [["5", "5 ms（低延迟）"], ["10", "10 ms"], ["25", "25 ms（稳）"]] },
       { path: "output.auto_expand_buffer", kind: "toggle", label: "欠载自动升档", hint: "underrun 主对策（Q1-c）" },
       { path: "output.buffer_max_ms", kind: "number", label: "升档上限", min: 10, max: 2000, step: 10, unit: "ms" },
-      { path: "output.on_device_gone", kind: "select", label: "设备拔出", options: [["follow-default", "跟随默认设备"], ["pause", "暂停播放"]] },
+      // P2（审查）：核心侧实况 = 拔出后自动重开（成功即续播），失败才收敛 paused；
+      // 尚无"一律暂停"分支 → 占位灰显，不做假接线。
+      { path: "output.on_device_gone", kind: "select", label: "设备拔出", options: [["follow-default", "跟随默认设备"]], placeholder: true, placeholderReason: "内核当前为自动重开（M4-c），pause 分支未实现" },
       { path: "output.release_on_conflict", kind: "select", label: "占用冲突（Q7 定案：不让位）", options: [["keep", "保持（其他应用自行切设备）"]] },
     ],
   },

@@ -324,6 +324,11 @@ void AudioBackend::StaticNotification(const ma_device_notification* n) {
 // 零分配零阻塞红线；rerouted（共享模式 miniaudio 已自动重路由，这里刷新 facts）
 // 与 interruption/失效（独占不自动重路由，需上层重建）统一一面旗。
 void AudioBackend::OnNotification(const ma_device_notification* n) {
+    // P2（审查）：interruption_began / 失效 = 设备已不可用，必须置 lost 旗；
+    // 否则 device_running() 的 lost 判据成死代码（只写 false 从不置 true）。
+    if (n->type == ma_device_notification_type_interruption_began) {
+        deviceLostSeen_.store(true, std::memory_order_release);
+    }
     if (n->type == ma_device_notification_type_rerouted ||
         n->type == ma_device_notification_type_interruption_began ||
         n->type == ma_device_notification_type_interruption_ended) {
@@ -893,7 +898,8 @@ proto::Json AudioBackend::Negotiated() const {
                        {"backend", "wasapi"},
                        {"format", std::move(format)},
                        {"buffer_ms", policy_.bufferMs()},
-                       {"period_ms", periodMs},
+                       // P2（审查）：period 未知时报 null 而非假 0（对齐 devices.list 口径）。
+                       {"period_ms", periodMs == 0 ? proto::Json(nullptr) : proto::Json(periodMs)},
                        {"auto_expanded", policy_.current().autoExpanded},
                        {"chain", std::move(chain)},
                        {"fidelity", fidelity},
