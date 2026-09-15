@@ -35,7 +35,20 @@
 [data-layout="desktop"] .archive-navigation { left: 26.25%; }
 [data-layout="desktop"] .column-navigation { left: 52.34375%; }
 [data-layout="desktop"] .archive-hint { left: 26.302083%; }
-[data-layout="desktop"] .detail-content { left: 60.104167%; width: min(636px, 33.125%); max-height: calc(100% - 369px); overflow-y: auto; scrollbar-width: thin; }
+/* R6-fix2（用户实测 1800x980 窗口）：原 max-height: calc(100% - 369px) 的 369 是按
+   1080p 设计稿硬编码，窗口较矮时预留不足 → 详情内容仍溢出到 EXPORT/页脚/品牌行区域
+   （用户截图：EXPORT 压在 LOCAL COLLECTION 上）。改为按**底部装饰实际占位**预留：
+   播放条(≤92px) + 页脚(92+10) + 品牌行(116+18) + 安全余量，且用 min() 与视口高度取小，
+   保证任何窗口尺寸下详情内容都停在装饰带上方。 */
+[data-layout="desktop"] .detail-content {
+  left: 60.104167%;
+  width: min(636px, 33.125%);
+  max-height: min(calc(100% - 369px), calc(100vh - 289px - 150px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 12px;
+  scrollbar-width: thin;
+}
 [data-layout="desktop"] .terminal-modal { max-width: calc(100% - 100px); }
 [data-layout="desktop"] .viewer-help, [data-layout="desktop"] .viewer-reset { width: 25%; }
 
