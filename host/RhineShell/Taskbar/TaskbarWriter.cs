@@ -26,6 +26,7 @@ public sealed class TaskbarWriter : IDisposable
     public const string DefaultPipeName = "go-musicfox.lyric.v1";
 
     private readonly object gate = new();
+    private readonly SemaphoreSlim writeGate = new(1, 1);  // P1-4：写序串行化
     private NamedPipeClientStream? pipe;
     private StreamWriter? writer;
     private int attempts;                       // 连续失败计数（退避用）
@@ -83,9 +84,14 @@ public sealed class TaskbarWriter : IDisposable
             lock (gate) droppedFrames++;
             return false;
         }
+        // P0-1（审查）：WriteAsync 不追加 NewLine——冻结协议按 \n 切行，
+        // 必须 WriteLineAsync（NewLine="\n" 在 TryOpenGate 已配）。
+        // P1-4（审查）：Bridge 事件 fire-and-forget，两个 ShowAsync 可并发取到同一 writer
+        // → 帧字节交错；写序锁覆盖"取流+写+flush"整段（musicfox PushLyric 全程持 mu 同构）。
+        await writeGate.WaitAsync(cancel).ConfigureAwait(false);
         try
         {
-            await textWriter.WriteAsync(line.AsMemory(), cancel).ConfigureAwait(false);
+            await textWriter.WriteLineAsync(line.AsMemory(), cancel).ConfigureAwait(false);
             await textWriter.FlushAsync(cancel).ConfigureAwait(false);
             lock (gate) { sentFrames++; attempts = 0; }
             return true;
@@ -102,6 +108,10 @@ public sealed class TaskbarWriter : IDisposable
             try { textWriter.Dispose(); } catch { /* 尽力回收 */ }
             try { stream.Dispose(); } catch { /* 同上 */ }
             return false;
+        }
+        finally
+        {
+            writeGate.Release();
         }
     }
 

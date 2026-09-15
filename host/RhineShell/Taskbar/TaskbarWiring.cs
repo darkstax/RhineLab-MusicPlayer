@@ -35,6 +35,7 @@ public static class TaskbarWiring
         var enabled = string.Equals(source, "player", StringComparison.OrdinalIgnoreCase);
         var pipe = Str(ConfigStore.Get("taskbar.pipe"));
         var writer = new TaskbarWriter(enabled, pipe);
+        bridge.TaskbarConnectedProbe = () => writer.IsConnected;  // P1-3：ack 回真实连接态
 
         bridge.LyricShowRequested += async frame =>
         {

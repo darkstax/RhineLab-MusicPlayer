@@ -69,17 +69,23 @@ public sealed class TaskbarWriterTests
             PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         var serverTask = Task.Run(async () =>
         {
-            await server.WaitForConnectionAsync();
-            var buf = new byte[256];
-            var n = await server.ReadAsync(buf, 0, buf.Length);
+            // 连接等待带 5s 超时（Windows vstest 宿主挂起教训：无超时的 WaitForConnectionAsync
+            // 在对端没来时无限悬挂）；超时抛异常 → 用例 FAIL 而非挂起。
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await server.WaitForConnectionAsync(cts.Token);
+            var buf = new byte[512];
+            var n = await server.ReadAsync(buf, 0, buf.Length, cts.Token);
             return Encoding.UTF8.GetString(buf, 0, n);
         });
         using var w = new TaskbarWriter(true, name);
         Assert.True(await w.ShowAsync("第一行", "第二行"));
         Assert.True(await w.ShowAsync("第三行", null));   // 复用已建连接
-        var received = await serverTask.WaitAsync(TimeSpan.FromSeconds(5));
+        var received = await serverTask.WaitAsync(TimeSpan.FromSeconds(8));
         Assert.StartsWith("""{"type":"lyric","primary":"第一行","secondary":"第二行"}""", received);
-        Assert.Contains("\n", received);                   // JSON Lines：\n 结尾
+        Assert.Contains("\n", received);                   // JSON Lines：帧必须 \n 闭合（P0-1 守护）
+        // 第二帧同连接复用且各自闭合（行数 == 帧数）。
+        var lines = received.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Single(lines);                                // server 首读即含完整闭合行（P0-1 语义）
         Assert.Equal(2, w.SentFrames);
         Assert.True(w.IsConnected);
     }

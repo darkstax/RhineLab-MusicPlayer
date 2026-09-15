@@ -55,6 +55,10 @@ public sealed class Bridge
     public event Func<JsonObject, Task<bool>>? LyricShowRequested;
     public event Func<JsonObject, Task<bool>>? TaskbarSetRequested;
 
+    /// <summary>审查 P1-3：taskbar.set 的 ack 需回真实连接态（协议 §5 {connected}）。
+    /// Bridge 不认识 writer，由 TaskbarWiring 注入此 probe（无注入时 false）。</summary>
+    public Func<bool>? TaskbarConnectedProbe;
+
     private async Task<bool> RaiseAsync(Func<JsonObject, Task<bool>>? handler, JsonObject frame)
     {
         if (handler is null) return false;
@@ -279,13 +283,14 @@ public sealed class Bridge
         {
             var handler = cmd == "lyric.show" ? LyricShowRequested : TaskbarSetRequested;
             var delivered = await RaiseAsync(handler, frame).ConfigureAwait(false);
-            Post(new JsonObject
+            var result = new JsonObject { ["delivered"] = delivered };
+            if (cmd == "taskbar.set")
             {
-                ["v"] = 1,
-                ["t"] = "ack",
-                ["id"] = id,
-                ["result"] = new JsonObject { ["delivered"] = delivered },
-            });
+                // 协议 §5 taskbar.set → {connected}：set 后 writer 立即试连可能尚未建立，
+                // 由 probe 决定是否已连（false 时前端据 delivered+connected 双信号判断）。
+                result["connected"] = TaskbarConnectedProbe?.Invoke() ?? false;
+            }
+            Post(new JsonObject { ["v"] = 1, ["t"] = "ack", ["id"] = id, ["result"] = result });
             return;
         }
 
