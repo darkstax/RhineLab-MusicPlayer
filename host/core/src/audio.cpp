@@ -39,6 +39,17 @@ int FormatBits(ma_format format) {
     }
 }
 
+// R3-P2-3（cb 复核）：源**有效位**（s16/s24/s32/f32 名 → 位数）。原实现把
+// bits_valid 直接复制 bits_container（恒 32）→ 24bit FLAC 的 UI 头条显示 32 bit，
+// 与协议示例和桩（exclusive?24:32）都不符。
+int SourceBitsValid(const std::string& fmt) {
+    if (fmt == "s16") return 16;
+    if (fmt == "s24") return 24;
+    if (fmt == "s32") return 32;
+    if (fmt == "f32" || fmt == "f64") return 32;
+    return 0;
+}
+
 std::string ToLower(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -881,7 +892,12 @@ proto::Json AudioBackend::Negotiated() const {
     proto::Json format = {
         {"rate", deviceFacts_.appRate},
         {"bits_container", FormatBits(deviceFacts_.appFormat)},
-        {"bits_valid", FormatBits(deviceFacts_.appFormat)},
+        // R3-P2-3：有效位取**源**位深（有曲时）；无曲/无法判定则退回容器位。
+        {"bits_valid", [&] {
+             const int src = hasTrack ? SourceBitsValid(facts_.sourceFormat) : 0;
+             return src > 0 ? std::min(src, FormatBits(deviceFacts_.appFormat))
+                            : FormatBits(deviceFacts_.appFormat);
+         }()},
         {"encoding", deviceFacts_.appFormat == ma_format_f32 ? std::string("pcm-float")
                                                              : std::string("pcm")},
         {"channels", deviceFacts_.appChannels},

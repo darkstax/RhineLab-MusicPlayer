@@ -49,6 +49,10 @@ if ($nonDefault.Count -ge 1) {
   $st1 = Wait-Reply 's-1'
   Assert ($st1.result.state -eq 'playing' -and $st1.result.position_ms -ge $pos0) `
     "切换后续播位置连续（$pos0 -> $($st1.result.position_ms)）"
+  # R3-P1-1（cb 复核）：设备重开必须用**实时**位置（曾误用 lastPositionMs_ = 起播锚点，
+  # 会让"播到 2:30 拔 DAC"重开后回跳到 0:00）。切设备同样是重开路径，位置不得回退。
+  Assert ($st1.result.position_ms -ge ($pos0 - 200)) `
+    "重开位置不回退（$pos0 -> $($st1.result.position_ms)，R3-P1-1 回归守护）"
   # 切回跟随默认
   Send @{v=1;t='cmd';id='q-2';cmd='devices.select';data=@{id=''}}
   $o2 = Wait-Reply 'q-2'

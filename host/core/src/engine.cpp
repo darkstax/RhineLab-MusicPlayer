@@ -391,7 +391,10 @@ std::vector<std::pair<std::string, proto::Json>> Engine::MaybeHandleDeviceEvent(
     }
     // 设备失效/拔出且 playing：自动重开尝试（跟随默认则切到新默认；钉选设备没了则失败）；
     // 重开不成 → 收敛 paused + evt.error{device_gone}（§7，交 UI 提示）。
-    const std::int64_t frozenMs = lastPositionMs_;
+    // R3-P1-1（cb 复核）：必须取**实时**位置。lastPositionMs_ 按设计只在非 playing
+    // 状态有效（playing 期它是起播锚点，Tick 不刷新）——用它会让"播到 2:30 拔 DAC"
+    // 重开后回跳到 0:00。与 SelectDevice/MaybeExpandBuffer 统一用 PositionMs()。
+    const std::int64_t frozenMs = PositionMs();
     std::string error;
     if (RebuildChain(frozenMs, true, error)) {
         extra.emplace_back("state", StatePayload());
