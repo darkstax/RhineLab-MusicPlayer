@@ -401,7 +401,11 @@ std::vector<std::pair<std::string, proto::Json>> Engine::MaybeHandleDeviceEvent(
         extra.emplace_back("position", PositionPayload());
         return extra;
     }
+    // R4（交互④实测，拔 DAC 复现）：失败路径必须把冻结位置写回 lastPositionMs_，
+    // 否则 PositionMs() 在 Paused 下返回**旧值**（起播锚点/0）→ 用户拔设备后看到
+    // 进度归零、续播从头开始（RebuildChain 成功路径有写回，这里漏了）。
     state_ = State::Paused;  // 设备没了，无法续播：冻结在末位置
+    lastPositionMs_ = frozenMs;
     extra.emplace_back("state", StatePayload());
     extra.emplace_back("error", proto::Json{{"code", "device_gone"},
                                             {"message", error.empty() ? "device unavailable" : error},

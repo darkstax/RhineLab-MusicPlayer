@@ -440,6 +440,31 @@ bool AudioBackend::ReopenForTrack(ma_uint32 srcRate, std::string& why) {
             return r;
         },
         base);
+    if (!result.opened && hasDeviceId_) {
+        // R4（交互④实测，用户现场反馈）：**钉选设备已消失**（拔 DAC/蓝牙掉线）时不得直接
+        // 失败——M4-PLAN §M4-c 与交互④的既定语义是"自动切系统默认续播"（拔掉耳机后应从
+        // 实卡继续出声，而不是静默 paused）。
+        //
+        // 但**不得沿用 exclusive**：独占是用户对**特定设备**的显式授权，回退到另一台
+        // 未经授权的设备仍抢独占会静音其它应用（违反 §15"独占绝不默认开"，用户现场观察到
+        // "拔出后短暂异常，然后仍显示独占"就是这个 bug）。回退一律用 shared。
+        hasDeviceId_ = false;
+        OpenAttempt fallback = base;
+        fallback.share = OutputMode::Shared;
+        std::string fallbackErr;
+        if (OpenDeviceKind(false, mixRate_, base.bufferMs, fallbackErr, nullptr, nullptr)) {
+            // 走 shared 成功：刷新策略账本（achieved=Shared，degraded=true 记时间线）。
+            policy_.Negotiate(
+                [this](const OpenAttempt&) -> OpenResult {
+                    OpenResult r;
+                    r.ok = true;  // 设备已在上面开好，这里只让 policy 记账
+                    return r;
+                },
+                fallback);
+            why = "pinned device gone, fell back to default in shared mode";
+            return true;
+        }
+    }
     if (!result.opened) {
         why = "all open attempts failed";
         return false;
