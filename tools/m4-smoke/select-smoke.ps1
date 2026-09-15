@@ -56,6 +56,22 @@ if ($nonDefault.Count -ge 1) {
 } else {
   Write-Host '  skip 无非默认枚举设备（单声卡机器）——钉选路径未覆盖，记 FINDINGS'
 }
+# R2-P1-1（cb 复核）：hardware 音量必须跨"设备重开"保持——masterVolumeFactor 是
+# 设备对象级的，ma_device_init 会重置为 1.0（实测：换曲/切设备后音量静默回 100%）。
+Send @{v=1;t='cmd';id='w-1';cmd='engine.volume';data=@{mode='hardware';value=0.4}}
+$null = Wait-Reply 'w-1'
+Start-Sleep -Milliseconds 600
+Send @{v=1;t='cmd';id='w-2';cmd='engine.state'}
+$mv0 = (Wait-Reply 'w-2').result.negotiated.chain | Where-Object { $_.node -eq 'volume' }
+Assert ([math]::Abs($mv0.master_volume - 0.4) -lt 0.02) "设音量后 master_volume=$($mv0.master_volume)（期望≈0.4）"
+# 触发设备重建（切共享↔独占必 uninit+init）
+Send @{v=1;t='cmd';id='w-3';cmd='output.mode';data=@{mode='shared';buffer_ms=20}}
+$null = Wait-Reply 'w-3'
+Start-Sleep -Seconds 1
+Send @{v=1;t='cmd';id='w-4';cmd='engine.state'}
+$mv1 = (Wait-Reply 'w-4').result.negotiated.chain | Where-Object { $_.node -eq 'volume' }
+Assert ([math]::Abs($mv1.master_volume - 0.4) -lt 0.02) "设备重开后 master_volume 保持=$($mv1.master_volume)（回归守护 R2-P1-1）"
+
 Send @{v=1;t='cmd';id='q-3';cmd='devices.select';data=@{id='{0.0.0.00000000}.{deadbeef-dead-beef-dead-deadbeefdead}'}}
 $o3 = Wait-Reply 'q-3'
 Assert ($o3.t -eq 'err' -and $o3.error.code -eq 'bad_request') '未知 id → bad_request'

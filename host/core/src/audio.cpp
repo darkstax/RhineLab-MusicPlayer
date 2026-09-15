@@ -301,6 +301,17 @@ bool AudioBackend::OpenDeviceKind(bool exclusive, ma_uint32 rate, int bufferMs,
     deviceFacts_.periods = device_.playback.internalPeriods;
     popScratch_.assign(static_cast<std::size_t>(deviceFacts_.periodFrames) * 2 + 4096 * 2, 0);
     deviceOpen_.store(true, std::memory_order_release);
+    // R2-P1-1（cb 复核，用 vendored miniaudio null 后端实测证实）：masterVolumeFactor 是
+    // **设备对象级**的，ma_device_init 每次把它重置为 1.0；而核心每次换曲/切模式/切设备
+    // 都会 uninit+init 设备 → hardware 路音量静默回到 100%（音量条仍显示旧值）。
+    // 设备重开后必须回放期望音量（hardware 路才回放；float/fixed 走软件增益不受影响）。
+    if (volumeMode_ == "hardware" && hardwareApplied_.load(std::memory_order_relaxed)) {
+        if (ma_device_set_master_volume(&device_, hardwareVolume_) != MA_SUCCESS) {
+            // 回放失败：退回软件增益，避免"UI 显示 40% 实际 100%"的静默失真。
+            softwareGain_.store(hardwareVolume_, std::memory_order_relaxed);
+            hardwareApplied_.store(false, std::memory_order_relaxed);
+        }
+    }
     return true;
 }
 
@@ -843,7 +854,12 @@ proto::Json AudioBackend::Negotiated() const {
                           std::string(hasTrack ? facts_.sourceFormat : "-") + "->s32"},
                      {"passthrough", hasTrack && facts_.outInteger && !sourceFloat && !floatConvert}});
     chain.push_back({{"node", "resample"}, {"passthrough", !resampled}});
-    chain.push_back({{"node", "volume"}, {"mode", volumeMode_}, {"passthrough", volumePassthrough}});
+    chain.push_back({{"node", "volume"},
+                     {"mode", volumeMode_},
+                     {"passthrough", volumePassthrough},
+                     // R2-P1-1 取证：设备**实际** masterVolumeFactor（非我们自己记的
+                     // hardwareVolume_）——设备重开后是否真回放音量，看这个数才算数。
+                     {"master_volume", static_cast<double>(master)}});
 
     std::string fidelity = [&] {
         // §13：bit-perfect 前提是独占流 → 共享模式恒非 bit-perfect（红线如实上报）。
