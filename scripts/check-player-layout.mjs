@@ -86,6 +86,7 @@ const result = await evalJs(`(() => {
     vw: innerWidth,
     overflow,
     specVSbar: ov(spec, pb),
+    specVSfooter: ov(spec, footer),
     poweredVSbar: ov(powered, pb),
     footerVSbar: ov(footer, pb),
     poweredVSfooter: ov(powered, footer),
@@ -104,7 +105,9 @@ const check = (ok, name, extra = "") => {
 };
 
 check(result.overflow.length === 0, "播放条内无元素溢出主条", result.overflow.length ? JSON.stringify(result.overflow) : "");
-check(!result.specVSbar.overlaps, "频谱不压播放条", `overlapY=${result.specVSbar.overlapY ?? 0}`);
+// 频谱是**有意收在主条内部**（R6：原在文档流会撑高容器压页脚）→ 不与主条做重叠判定，
+// 只要求它不越出主条边界（由上面的 overflow 检查覆盖），且不与页脚重叠。
+check(!result.specVSfooter.overlaps, "频谱不压系统页脚", `overlapY=${result.specVSfooter.overlapY ?? 0}`);
 check(!result.poweredVSbar.overlaps, "品牌行(POWERED BY)不压播放条", `overlapY=${result.poweredVSbar.overlapY ?? 0}`);
 check(!result.footerVSbar.overlaps, "系统页脚不压播放条", `overlapY=${result.footerVSbar.overlapY ?? 0}`);
 check(!result.poweredVSfooter.overlaps, "品牌行不压系统页脚", `overlapY=${result.poweredVSfooter.overlapY ?? 0}`);
