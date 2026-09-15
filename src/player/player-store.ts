@@ -159,6 +159,12 @@ export class PlayerStore {
   };
 
   private readonly listeners = new Set<Listener>();
+  /**
+   * R6（用户实测修正）：`lib:<id>` 的真实歌名缓存（trackId → 显示名）。
+   * trackLabelOf 只能从 id 猜（lib: 猜不出），真名由 m1-mount 查 library.get 后回填；
+   * 缓存后 acceptState 重放时优先用它，否则每次 state 帧都会把真名覆盖回 "ARCHIVE lib:NNN"。
+   */
+  private readonly resolvedLabels = new Map<string, string>();
   private readonly local = new LocalEngine();
   private localTimer: ReturnType<typeof setInterval> | null = null;
   private readonly unsubscribe: (() => void)[] = [];
@@ -205,7 +211,9 @@ export class PlayerStore {
     this.emit({
       state,
       trackId,
-      trackLabel: trackId ? trackLabelOf(trackId) : this.snapshot.trackLabel,
+      trackLabel: trackId
+        ? (this.resolvedLabels.get(trackId) ?? trackLabelOf(trackId))
+        : this.snapshot.trackLabel,
       positionMs: asNumber(data.position_ms, this.snapshot.positionMs),
       durationMs: asNumber(data.duration_ms, this.snapshot.durationMs),
       volume: asNumber(data.volume, this.snapshot.volume),
@@ -333,6 +341,18 @@ export class PlayerStore {
         return { trackId: id, trackLabel: trackLabelOf(id), durationMs };
       },
     );
+  }
+
+  /**
+   * R6：回填 `lib:<id>` 的真实歌名（m1-mount 查 library.get 后调用）。
+   * 只改名、不触发 IPC（纯展示层修正），并记入缓存供后续 state 帧复用。
+   */
+  setTrackLabel(label: string): void {
+    const id = this.snapshot.trackId;
+    const text = label.trim();
+    if (!id || !text) return;
+    this.resolvedLabels.set(id, text);
+    this.emit({ trackLabel: text });
   }
 
   async pause(): Promise<void> {

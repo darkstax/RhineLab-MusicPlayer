@@ -40,8 +40,14 @@ if (bridge.desktop) {
   mountLibraryPanel();
 }
 
-/** 协议 v1.4 §5：engine.play 的 lib:<track_id> 前缀 → library.get 数字 id。其它来源无库条目。 */
-function loadLyric(trackId: string | null): void {
+/**
+ * 协议 v1.4 §5：engine.play 的 lib:<track_id> 前缀 → library.get 数字 id。其它来源无库条目。
+ *
+ * R6（用户实测）：此前只取歌词、不取标题，播放条于是显示 `ARCHIVE lib:1143`（原始 track_id）
+ * 而不是真实歌名。现在一次 library.get 同时补**标题**与**歌词**——不多一次往返。
+ * 标题回填走 playerStore.setTrackLabel（用户选曲后瞬时显示 id，随即被真名覆盖）。
+ */
+function loadTrackMeta(trackId: string | null): void {
   const match = trackId ? /^lib:(\d+)$/.exec(trackId) : null;
   if (!match) {
     lyricView.setText(null);
@@ -50,8 +56,13 @@ function loadLyric(trackId: string | null): void {
   bridge
     .call("library.get", { id: Number(match[1]) })
     .then((result) => {
-      const text = (result as { lyric_text?: unknown } | null)?.lyric_text;
+      const dto = result as { lyric_text?: unknown; title?: unknown; artist?: unknown } | null;
+      const text = dto?.lyric_text;
       lyricView.setText(typeof text === "string" ? text : null);
+      // 标题：title（无则回退 id）；有 artist 时拼成「歌名 · 艺术家」便于确认选中的是哪首。
+      const title = typeof dto?.title === "string" && dto.title.trim() ? dto.title.trim() : null;
+      const artist = typeof dto?.artist === "string" && dto.artist.trim() ? dto.artist.trim() : null;
+      if (title) playerStore.setTrackLabel(artist ? `${title} · ${artist}` : title);
     })
     .catch(() => lyricView.setText(null)); // 壳未就绪/查询失败：空态，不打断播放
 }
@@ -62,7 +73,7 @@ function mountLyricWiring(): void {
   playerStore.subscribe((snapshot) => {
     if (snapshot.trackId !== lastTrackId) {
       lastTrackId = snapshot.trackId;
-      loadLyric(snapshot.trackId);
+      loadTrackMeta(snapshot.trackId);
     }
     // 只在停止/待机是**转移**发生时清除（1Hz ticker 反复 emit 同状态不得重复 clear）。
     if (snapshot.state !== lastState) {

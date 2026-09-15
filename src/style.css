@@ -143,7 +143,10 @@ button {
 .powered {
   position: absolute;
   right: 59px;
-  bottom: 108px;
+  /* R6（用户实测）：原 bottom:108px 让本行落在 y702-720，与播放条（y708-782，
+     含 pb-spectrum 延展到 782）水平带重叠 12px——品牌字被播放条压住。
+     抬到播放条上沿之外（播放条顶 ≈ bottom:18+74=92 → 取其上方 20px 余量）。 */
+  bottom: 116px;
   font-size: 18px;
   z-index: 5;
   display: flex;
@@ -635,7 +638,10 @@ button {
 }
 .system-footer {
   position: absolute;
-  bottom: 35px;
+  /* R6（用户实测）：播放条 #player-bar 占 bottom:18px + 高 48px（含频谱 ABS 后不撑高）
+     → 其顶沿在 bottom≈66px。页脚原在 bottom:35px，与播放条恒重叠（"已经撞上了"）。
+     抬到 bottom:92px：完全位于播放条上方，且与 .powered（bottom:116px）分层不叠。 */
+  bottom: 92px;
   left: 59px;
   right: 59px;
   font-size: 10px;
@@ -737,6 +743,15 @@ button {
   left: 1154px;
   top: 289px;
   width: 636px;
+  /* R6（用户实测）：原无高度约束 → 详情内容长时直接溢到底部，EXPORT 按钮
+     压到 .powered（bottom:116px）与 .system-footer（bottom:92px）。
+     限高到「视口高 - 289 - 底部安全区(150px)」并自行滚动；
+     底部安全区 = 品牌行(116+18) + 页脚(92+10) + 播放条上沿余量。 */
+  max-height: calc(100vh - 289px - 150px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 8px;
+  scrollbar-width: thin;
   pointer-events: auto;
   opacity: 0;
   outline: none !important;
@@ -1561,7 +1576,9 @@ button {
   opacity: 1;
 }
 [data-mode="detail"] .powered {
-  bottom: 108px;
+  /* R6（用户实测）：原 bottom:108px 让品牌行落在播放条（y734-782 带）里 →
+     "EXPORT 箭头插进 POWERED BY 文字"。与基础规则统一为 116px（播放条上方）。 */
+  bottom: 116px;
 }
 [data-mode="detail"] .archive-ui {
   opacity: 0;

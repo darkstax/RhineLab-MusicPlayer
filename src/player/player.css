@@ -190,10 +190,16 @@
 #player-bar .pb-load {
   display: flex;
   gap: 6px;
+  /* R6（用户实测）：原无弹性约束 → 窗口偏窄时整个 load 组溢出播放条右边界
+     （截图 1226px 宽下 LOAD 已经压到边框外）。允许收缩，输入框先让位。 */
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 #player-bar .pb-id {
   width: 118px;
+  min-width: 0;
+  flex: 1 1 118px;
   height: 30px;
   border: 1px solid var(--theme-line, #aaa59a);
   border-radius: 6px;
@@ -241,8 +247,15 @@
   justify-content: flex-end;
   align-items: flex-end;
   gap: 2px;
-  height: 20px;
-  margin-top: 6px;
+  /* R6（用户实测）：频谱原在文档流里撑高 #player-bar 到 y782，与系统页脚
+     （y764-774）重叠 10px——"可视化会和文字撞上"。改为**绝对定位收进主条内部**
+     （左下角），既不撑高容器、也不再压到页脚。 */
+  position: absolute;
+  left: 14px;
+  bottom: 4px;
+  pointer-events: none;
+  height: 14px;
+  margin-top: 0;
   opacity: 0.35;
   transition: opacity 0.4s ease;
 }
@@ -260,4 +273,27 @@
   background: var(--theme-accent, #9b7247);
   border-radius: 1px 1px 0 0;
   will-change: transform;
+}
+
+/* R6（用户实测）：中等宽度（≤1120px）下 identity/progress/times/volume/load 总需求超过
+   播放条定宽，原实现让最后的 load 组溢出右边界。此档收起档案号输入框（LOAD 按钮保留，
+   曲目 id 实际由曲库点选决定，手输是次要路径）。 */
+@media (max-width: 1120px) {
+  #player-bar .pb-id {
+    display: none;
+  }
+  #player-bar .pb-load {
+    flex: 0 0 auto;
+  }
+}
+
+/* 更窄档：音量滑块也让位（VOL 图标保留，滚轮/系统音量仍可用）。 */
+@media (max-width: 920px) {
+  #player-bar .pb-volume input[type="range"] {
+    display: none;
+  }
+  #player-bar .pb-title {
+    flex: 0 0 110px;
+    width: 110px;
+  }
 }
