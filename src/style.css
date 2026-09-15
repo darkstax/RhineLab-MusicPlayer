@@ -640,8 +640,8 @@ button {
   position: absolute;
   /* R6（用户实测）：播放条 #player-bar 占 bottom:18px + 高 48px（含频谱 ABS 后不撑高）
      → 其顶沿在 bottom≈66px。页脚原在 bottom:35px，与播放条恒重叠（"已经撞上了"）。
-     抬到 bottom:92px：完全位于播放条上方，且与 .powered（bottom:116px）分层不叠。 */
-  bottom: 92px;
+     抬到 bottom:88px：位于播放条上方，与 .powered（bottom:116px，占 18px 高）留 10px 间隙。 */
+  bottom: 88px;
   left: 59px;
   right: 59px;
   font-size: 10px;
