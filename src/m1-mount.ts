@@ -67,6 +67,11 @@ function mountLyricWiring(): void {
     // 只在停止/待机是**转移**发生时清除（1Hz ticker 反复 emit 同状态不得重复 clear）。
     if (snapshot.state !== lastState) {
       if (snapshot.state === "stopped" || snapshot.state === "idle") lyricView.clear();
+      // P1-2：进入播放态显式解除 clear() 闩锁——停止后重播同一曲不会触发
+      // setText（trackId 未变），没有这一步歌词会永久空白。
+      if (snapshot.state === "playing" || snapshot.state === "paused") {
+        lyricView.setPlaybackActive(true);
+      }
       lastState = snapshot.state;
     }
     // 审查 P1-1：停止后引擎把 position 归 0（FakeEngine/engine.cpp 既定语义），

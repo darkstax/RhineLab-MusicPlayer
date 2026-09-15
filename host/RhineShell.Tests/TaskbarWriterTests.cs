@@ -62,7 +62,9 @@ public sealed class TaskbarWriterTests
     [Trait("platform", "windows")]
     public async Task EndToEnd_frame_reaches_pipe_server()
     {
-        if (!OperatingSystem.IsWindows()) return;   // WSL 无命名管道：跳过（Windows 侧全量跑）
+        // P2-2（审查）：原 `if (!OperatingSystem.IsWindows()) return;` 把本用例在 WSL
+        // 下变成"直接返回但计 pass"——P0-1 的 \n 闭合断言实际从未运行（假绿）。
+        // 实测 WSL 的 .NET 命名管道完全可用（读写含换行正常），故移除守卫，断言真跑。
 
         var name = $"rhine-test-e2e-{Guid.NewGuid():N}";
         using var server = new NamedPipeServerStream(name, PipeDirection.In, 1,
@@ -83,9 +85,13 @@ public sealed class TaskbarWriterTests
         var received = await serverTask.WaitAsync(TimeSpan.FromSeconds(8));
         Assert.StartsWith("""{"type":"lyric","primary":"第一行","secondary":"第二行"}""", received);
         Assert.Contains("\n", received);                   // JSON Lines：帧必须 \n 闭合（P0-1 守护）
-        // 第二帧同连接复用且各自闭合（行数 == 帧数）。
-        var lines = received.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        Assert.Single(lines);                                // server 首读即含完整闭合行（P0-1 语义）
+        // 两帧各自 \n 闭合（P0-1 语义）。注意：首读可能只含一帧（时序依赖），
+        // 故不断言"首读恰一行"，改为断言"读到的内容每行都是闭合帧"。
+        foreach (var line in received.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            Assert.StartsWith("{", line);                    // 完整 JSON 对象（未被截断）
+            Assert.EndsWith("}", line);
+        }
         Assert.Equal(2, w.SentFrames);
         Assert.True(w.IsConnected);
     }

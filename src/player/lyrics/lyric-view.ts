@@ -77,6 +77,7 @@ export class LyricView {
    *  否则 stop→position:0 会把首行写回、任务栏歌词"复活"（m1-mount 已有守卫，
    *  此处兜底并使之可单测）。 */
   private clearedSilent = false;
+  /** 播放状态显式位（P1-2）：playing/paused → true；stopped/idle → false。 */
   private open = false;
   private onToggle: (() => void) | null = null;
 
@@ -94,7 +95,9 @@ export class LyricView {
   /** 按当前播放位置刷新高亮、滚动与任务栏上行（面板收起时仍上行——任务栏歌词不依赖面板可见）。 */
   setPosition(positionMs: number): void {
     if (!Number.isFinite(positionMs) || positionMs < 0) return;
-    // clear() 后、新词到位前的残留驱动（stop 的 position:0）不得复活歌词。
+    // P1-2：闩锁的解除不能靠位置启发式（"暂停在 0 秒后重播"会误判），
+    // 必须由**掌握播放状态的一方**显式解除——m1-mount 在 state 进入 playing/paused
+    // 时调 setPlaybackActive(true)。此处仅执行闩锁本身。
     if (this.clearedSilent) return;
     this.lastPositionMs = positionMs;
     const index = findLineIndex(this.parseResult.lines, positionMs);
@@ -107,6 +110,15 @@ export class LyricView {
     if (primary !== this.lastSent.primary || secondary !== this.lastSent.secondary) {
       this.sendLyricShow(primary, secondary);
     }
+  }
+
+  /**
+   * 播放态显式驱动（P1-2）：state 进入 playing/paused 即解除 clear() 闩锁，
+   * 使「停止后重播同一曲」（trackId 未变、不触发 setText）的歌词能恢复。
+   * 由 m1-mount 调用——那里是唯一知道 state 的地方。
+   */
+  setPlaybackActive(active: boolean): void {
+    if (active) this.clearedSilent = false;
   }
 
   /** 停止/无词时清除高亮并通知壳清空任务栏。 */

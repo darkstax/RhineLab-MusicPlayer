@@ -327,11 +327,13 @@ public sealed class Bridge
                 // play 时核心按 config 兜底重协商由 M6 收口项处理，见 FINDINGS）。
                 if (path == "output.device")
                 {
-                    ForwardCoreCmd("devices.select", new JsonObject
-                    {
-                        ["id"] = value?.GetValueKind() == JsonValueKind.String
-                            ? JsonValue.Create(value!.GetValue<string>()) : JsonValue.Create(""),
-                    });
+                    // P1-3（审查）：设置页首项值是字面量哨兵 "default"，核心只认空串
+                    // （=跟随系统默认，audio.cpp SelectDevice）。原样转发会 bad_request，
+                    // 用户钉选后回不到跟随默认。此处翻译哨兵。
+                    var rawDevice = value?.GetValueKind() == JsonValueKind.String
+                        ? value!.GetValue<string>() : "";
+                    var deviceId = rawDevice == "default" ? "" : rawDevice;
+                    ForwardCoreCmd("devices.select", new JsonObject { ["id"] = deviceId });
                 }
                 else if (Array.IndexOf(OutputModeKeys, path) >= 0)
                 {

@@ -448,13 +448,15 @@ CommandOutcome Engine::SetVolume(const std::string& mode, std::optional<double> 
     double target = value.has_value() ? *value : volume_;
     if (target < 0.0) target = 0.0;
     if (target > 1.0) target = 1.0;
-    // P1-4（审查）：独占下 miniaudio 的 master volume 实为应用侧软件增益，
-    // 记 hardware-volume 会谎报直通路径——核心侧真回落 fixed（UI 提示只是预告，
-    // 这里才是落地；位完美前提 = 音量 100% 直通）。
+    // P1-4/P1-1（审查）：独占下 miniaudio 的 master volume 实为应用侧软件增益，
+    // 记 hardware-volume 会谎报直通路径。**回落 float 而非 fixed**：
+    //   - 回落 fixed(1.0) 会让独占下音量条静默失效（拖了没反应，UI 却显示新值）；
+    //   - 回落 float 保留软件增益（音量条可用）， fidelity/factors 如实降级为
+    //     float-volume（非位完美），语义诚实且功能不丢。
+    // 位完美 = 独占 ∧ 音量 100% ∧ 无其它因子（音量非 1 时本就不是位完美）。
     std::string effectiveMode = mode;
     if (effectiveMode == "hardware" && audio_.exclusive()) {
-        effectiveMode = "fixed";
-        target = 1.0;
+        effectiveMode = (target >= 0.999999) ? "fixed" : "float";
     }
     volumeMode_ = effectiveMode;
     volume_ = effectiveMode == "fixed" ? 1.0 : target;
@@ -467,9 +469,11 @@ CommandOutcome Engine::SetVolume(const std::string& mode, std::optional<double> 
             audio_.SetSoftwareGain(static_cast<float>(volume_));  // 回退：端点不可用
         }
     } else {
-        const float gain = mode == "fixed" ? 1.0f : static_cast<float>(volume_);
+        // P2-4：统一传 effectiveMode（原传原始 mode 会让 audio_.volumeMode_ 留在
+        // "hardware" → negotiated.chain.volume.mode 与 ack 的 effective.mode 互相矛盾）。
+        const float gain = effectiveMode == "fixed" ? 1.0f : static_cast<float>(volume_);
         audio_.SetSoftwareGain(gain);
-        audio_.SetVolumeMode(mode);  // 内部恢复端点 100%（若之前是 hardware 路）
+        audio_.SetVolumeMode(effectiveMode);
     }
     // 桩 SetVolume 的事件序 = [position, state]。
     CommandOutcome outcome;

@@ -29,7 +29,7 @@ test("P1-1 回归：clear 后残留 setPosition(0) 不复活歌词，setText 新
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(view.stats().lyricShownCalls, 1);
 
-  // 停止 → 壳清空 + 随后到达的 position:0（旧实现在此把首行写回，任务栏歌词"复活"）
+  // 停止 → 壳清空 + 随后到达的残留位置（旧实现在此把首行写回，任务栏歌词"复活"）
   view.clear();
   view.setPosition(0);
   view.setPosition(2100);
@@ -37,6 +37,7 @@ test("P1-1 回归：clear 后残留 setPosition(0) 不复活歌词，setText 新
   const st = view.stats();
   assert.equal(st.lyricShownCalls, 2, "clear 后只应有清除帧，不被残留驱动复活");
   assert.deepEqual(st.lastLyricShown, { primary: "", secondary: "" });
+  assert.equal(st.activeIndex, -1, "闩锁期间不得高亮");
 
   // 新曲新词到位 → 抑制解除，位置驱动恢复
   view.setText("[00:01.00]新曲首句");
@@ -44,6 +45,30 @@ test("P1-1 回归：clear 后残留 setPosition(0) 不复活歌词，setText 新
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(view.stats().lastLyricShown.primary, "新曲首句");
   assert.equal(view.stats().lyricShownCalls, 3);
+});
+
+test("P1-2 回归：停止后重播同一曲（无 setText）歌词必须复活", async () => {
+  const view = new LyricView();
+  view.setText(LRC);
+  view.setPosition(2500);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(view.stats().activeIndex, 1);
+
+  // 停止 → clear()；旧实现只有 setText 能解锁，而重播同一曲不触发 setText
+  view.clear();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(view.stats().activeIndex, -1);
+
+  // 重播同一曲：state→playing（trackId 未变 → 无 setText），m1-mount 会显式
+  // 调 setPlaybackActive(true) 解除闩锁——这是 P1-2 的修复面。
+  view.setPlaybackActive(true);
+  view.setPosition(0);
+  view.setPosition(500);
+  view.setPosition(2500);
+  await new Promise((r) => setTimeout(r, 10));
+  const st = view.stats();
+  assert.equal(st.activeIndex, 1, "重播后歌词必须复活");
+  assert.deepEqual(st.lastLyricShown, { primary: "第一句 原文", secondary: "First line translated" });
 });
 
 test("行未变化不重发；clear 发空串清除帧", async () => {
