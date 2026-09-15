@@ -73,6 +73,10 @@ export class LyricView {
   /** 去重基准：仅在上行内容变化时发 lyric.show（含切曲后清空为 "",""）。 */
   private lastSent = { primary: "", secondary: "" };
   private bridgeAbsentSilent = false;
+  /** P1-1 纵深：clear() 后抑制位置驱动，直到 setText（新曲/新词）解除——
+   *  否则 stop→position:0 会把首行写回、任务栏歌词"复活"（m1-mount 已有守卫，
+   *  此处兜底并使之可单测）。 */
+  private clearedSilent = false;
   private open = false;
   private onToggle: (() => void) | null = null;
 
@@ -80,6 +84,7 @@ export class LyricView {
   setText(text: string | null): void {
     this.parseResult = text && text.trim() ? parseLrc(text) : { lines: [], meta: { ...EMPTY_META }, skipped: 0 };
     this.activeIndex = -1;
+    this.clearedSilent = false;  // 新词到位 = 解除 clear() 抑制
     this.render();
     // 用已收到的最新进度对齐（setPosition 自带行比较，行未变不会重发上行）；
     // 尚未收到进度（冒烟直接 setText）时保持静默。
@@ -89,6 +94,8 @@ export class LyricView {
   /** 按当前播放位置刷新高亮、滚动与任务栏上行（面板收起时仍上行——任务栏歌词不依赖面板可见）。 */
   setPosition(positionMs: number): void {
     if (!Number.isFinite(positionMs) || positionMs < 0) return;
+    // clear() 后、新词到位前的残留驱动（stop 的 position:0）不得复活歌词。
+    if (this.clearedSilent) return;
     this.lastPositionMs = positionMs;
     const index = findLineIndex(this.parseResult.lines, positionMs);
     if (index !== this.activeIndex) {
@@ -104,6 +111,7 @@ export class LyricView {
 
   /** 停止/无词时清除高亮并通知壳清空任务栏。 */
   clear(): void {
+    this.clearedSilent = true;
     if (this.activeIndex !== -1) {
       this.activeIndex = -1;
       this.highlight();
@@ -111,6 +119,7 @@ export class LyricView {
     if (this.lastSent.primary !== "" || this.lastSent.secondary !== "") {
       this.sendLyricShow("", "");
     }
+    this.lastPositionMs = -1;  // 旧进度作废：setText 不得据它立刻复活首行
   }
 
   toggle(): void {

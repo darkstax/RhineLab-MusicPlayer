@@ -22,6 +22,30 @@ test("web/桥缺席：setText+setPosition 静默（not_desktop 被吞，零异�
   assert.equal(st.mounted, false, "node 下不触 DOM 不崩");
 });
 
+test("P1-1 回归：clear 后残留 setPosition(0) 不复活歌词，setText 新词才恢复", async () => {
+  const view = new LyricView();
+  view.setText(LRC);
+  view.setPosition(2500);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(view.stats().lyricShownCalls, 1);
+
+  // 停止 → 壳清空 + 随后到达的 position:0（旧实现在此把首行写回，任务栏歌词"复活"）
+  view.clear();
+  view.setPosition(0);
+  view.setPosition(2100);
+  await new Promise((r) => setTimeout(r, 10));
+  const st = view.stats();
+  assert.equal(st.lyricShownCalls, 2, "clear 后只应有清除帧，不被残留驱动复活");
+  assert.deepEqual(st.lastLyricShown, { primary: "", secondary: "" });
+
+  // 新曲新词到位 → 抑制解除，位置驱动恢复
+  view.setText("[00:01.00]新曲首句");
+  view.setPosition(1500);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(view.stats().lastLyricShown.primary, "新曲首句");
+  assert.equal(view.stats().lyricShownCalls, 3);
+});
+
 test("行未变化不重发；clear 发空串清除帧", async () => {
   const view = new LyricView();
   view.setText(LRC);
