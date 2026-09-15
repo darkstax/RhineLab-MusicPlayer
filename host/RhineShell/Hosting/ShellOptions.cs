@@ -117,13 +117,20 @@ public sealed class ShellOptions
     }
 
     /// <summary>
-    /// 产物定位顺序：显式 <c>--dist</c> → 从 exe 逐级上溯找 <c>dist/index.html</c>（开发构建树）
-    /// → <c>%LOCALAPPDATA%\RhineMusic\web</c>（m1-run.ps1 镜像布局）。
+    /// 产物定位顺序：显式 <c>--dist</c> → exe 同级 <c>web/index.html</c>（打包随包形态，
+    /// 审查 P1-1 补）→ 逐级上溯找 <c>dist/index.html</c>（开发构建树）
+    /// → <c>%LOCALAPPDATA%\RhineMusic\web</c>（m1-run.ps1 镜像布局，开发兜底）。
     /// 找不到不抛异常：由 MainWindow 渲染白底红字提示页（任务书要求不崩溃）。
     /// </summary>
     private static string ResolveDist(string? explicitPath)
     {
         if (!string.IsNullOrWhiteSpace(explicitPath)) return Path.GetFullPath(explicitPath);
+
+        // 审查 P1-1（发布阻断）：打包布局是 <exe 同级>/web/（package.ps1 stage），
+        // 原实现只上溯找 dist/ 或回退开发镜像路径 → 干净机 zip 解压后必现"找不到前端产物"。
+        // 优先查同级 web/（随包分发形态），再上溯 dist/（开发构建树）。
+        var siblingWeb = Path.Combine(AppContext.BaseDirectory, "web");
+        if (File.Exists(Path.Combine(siblingWeb, "index.html"))) return siblingWeb;
 
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         for (var depth = 0; depth < 8 && directory is not null; depth++)
