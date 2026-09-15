@@ -155,11 +155,13 @@ test("6. 互斥灰显联动：改动后重算 + withConfigChange 归自定义", 
   assert.equal(state.preset, "everyday"); // 与默认一致仍为日常
   const moved = withConfigChange({ ...CONFIG_DEFAULTS }, {}, { path: "quality.volume_mode", value: "float" });
   assert.equal(moved.preset, "custom");
-  // M4-d：exclusive 解锁——默认（shared）无约束；exclusive+hardware 音量才提示回落。
-  assert.equal(constraintState(CONFIG_DEFAULTS)["output.mode.exclusive"], null);
-  assert.match(
-    constraintState({ ...CONFIG_DEFAULTS, "output.mode": "exclusive", "quality.volume_mode": "hardware" })["output.mode.exclusive"],
-    /hardware 音量不可用/,
+  // P1-5：exclusive+hardware 由核心侧回落（P1-4），UI 不再有 output.mode* 约束键。
+  assert.ok(!("output.mode" in constraintState(CONFIG_DEFAULTS)));
+  assert.equal("output.mode.exclusive" in constraintState(CONFIG_DEFAULTS), false);
+  assert.equal(
+    "output.mode.exclusive" in
+      constraintState({ ...CONFIG_DEFAULTS, "output.mode": "exclusive", "quality.volume_mode": "hardware" }),
+    false,
   );
 });
 

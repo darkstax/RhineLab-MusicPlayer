@@ -550,7 +550,11 @@ async function updateFooterStats() {
     const result = (await bridge.call("library.stats", {}, 5000)) as Record<string, unknown> | null;
     const albums = typeof result?.albums === "number" ? result.albums : records.length;
     const tracks = typeof result?.tracks === "number" ? result.tracks : 0;
-    statsSpan.textContent = `LOCAL COLLECTION · ${albums} ALBUMS / ${tracks} TRACKS`;
+    // P1-5（审查）：albums 查询无 offset → 超 limit 静默截断；页脚如实标注已显示数，
+    // 不让用户面对"莫名少了一批专辑"无提示（truncated 消费点，data.ts 已置位）。
+    const shown = records.length;
+    const truncNote = wallMode.truncated && shown < albums ? ` (显示 ${shown})` : "";
+    statsSpan.textContent = `LOCAL COLLECTION · ${albums} ALBUMS${truncNote} / ${tracks} TRACKS`;
   } catch {
     statsSpan.textContent = `LOCAL COLLECTION · ${records.length} ALBUMS`;
   }
@@ -712,7 +716,7 @@ function wallDetailMarkup(r: ArchiveRecord) {
   <dl class="metadata wall-metadata">${fields}</dl>
   <div class="detail-tabs" role="tablist"><button id="tab-tracks" class="active" role="tab" aria-controls="tab-panel" aria-selected="true" data-tab="tracks">01 <span>歌单</span></button><button id="tab-intro" role="tab" aria-controls="tab-panel" aria-selected="false" data-tab="intro">02 <span>专辑介绍</span></button><i class="tab-indicator" aria-hidden="true"></i></div>
   <div id="tab-panel" class="tab-panel" role="tabpanel">${albumTracksPanel(r)}</div>
-  <div class="detail-actions"><button class="solid-button" data-action="bookmark">${saved.has(r.id) ? "− REMOVE FROM SAVED" : "＋ SAVE ALBUM"}<span>${saved.has(r.id) ? "已收藏" : "收藏专辑"}</span></button><a class="export-button" data-action="export-tracks" href="#" aria-label="导出 ${r.id} 曲目清单">EXPORT <span>↓</span></a></div>
+  <div class="detail-actions"><button class="solid-button" data-action="bookmark">${saved.has(r.id) ? "− REMOVE FROM SAVED" : "＋ SAVE ALBUM"}<span>${saved.has(r.id) ? "已收藏" : "收藏专辑"}</span></button><button class="export-button" data-action="export-tracks" aria-label="导出 ${r.id} 曲目清单">EXPORT <span>↓</span></button></div>
   <div class="detail-footnote"><span>LOCAL COLLECTION <i>／</i> ${escapeHtml(r.category)}</span><span>${String(selected + 1).padStart(3, "0")} / ${String(records.length).padStart(3, "0")}</span></div>`;
 }
 

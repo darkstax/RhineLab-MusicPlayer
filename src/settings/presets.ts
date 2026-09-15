@@ -163,12 +163,10 @@ export function constraintState(config: Readonly<Record<string, unknown>>): Cons
         : null,
     "quality.target_rate": resample !== "force" ? "仅在强制重采样（force）时可调" : null,
     "quality.resample_quality": resample !== "force" ? "仅在强制重采样（force）时可调" : null,
-    // M4 已实现：exclusive 不再恒灰；但独占下 hardware 音量不可用（无端点会话音量），
-    // 独占 ∧ float 音量 = 非位完美——诚实提示（不阻断，徽章如实降级）。
-    "output.mode.exclusive":
-      text(config["output.mode"], "shared") === "exclusive" && volumeMode === "hardware"
-        ? "独占模式下 hardware 音量不可用，音量将回落 fixed（位完美前提）"
-        : null,
+    // P1-5（审查）：exclusive+hardware 的提示原挂在 "output.mode.exclusive" 死键上
+    // （select 按 field.path 查约束，永不命中）。P1-4 已在核心侧真回落 hardware→fixed，
+    // 该组合不再需要 UI 阻断（且约束会 disable 整个 select 导致"改不回去"）——删除；
+    // 位完美前提改由 output.mode 的 hint（EXCLUSIVE_NOTE）陈述性表达。
   };
 }
 

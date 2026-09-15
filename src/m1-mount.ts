@@ -69,8 +69,11 @@ function mountLyricWiring(): void {
       if (snapshot.state === "stopped" || snapshot.state === "idle") lyricView.clear();
       lastState = snapshot.state;
     }
-    // 位置无条件送（setPosition 自带行/内容去重；paused 时 seek 也能刷新当前行）。
-    lyricView.setPosition(snapshot.positionMs);
+    // 审查 P1-1：停止后引擎把 position 归 0（FakeEngine/engine.cpp 既定语义），
+    // 紧随的 setPosition(0) 会把首行写回、任务栏歌词复活——非播放态短路位置驱动。
+    if (snapshot.state === "playing" || snapshot.state === "paused") {
+      lyricView.setPosition(snapshot.positionMs);
+    }
   });
 }
 
