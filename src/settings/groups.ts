@@ -306,7 +306,10 @@ export const GROUPS: readonly GroupDef[] = [
     id: "quality",
     label: "音质 / QUALITY",
     fields: [
-      { path: "quality.volume_mode", kind: "select", label: "音量模式", options: [["hardware", "硬件（系统音量）"], ["fixed", "固定（应用满音量）"], ["integer", "整型音量"], ["float", "浮点音量"]] },
+      // R3-P2-8：integer（定点位完美衰减）核心侧仍是 not_implemented（engine.cpp 显式
+      // 拒绝）→ 只保留已实现三态；integer 作为占位项单独标注，避免"选了没反应"。
+      { path: "quality.volume_mode", kind: "select", label: "音量模式", options: [["hardware", "硬件（会话音量）"], ["fixed", "固定（应用满音量 · 位完美前提）"], ["float", "浮点（软件增益）"]] },
+      { path: "quality.volume_mode_integer", kind: "select", label: "整型音量（定点衰减）", options: [["off", "未启用"]], placeholder: true, placeholderReason: "内核未实现（M4 范围外），占位灰显" },
       { path: "quality.resample", kind: "select", label: "重采样", options: [["off", "关闭（源速率直出）"], ["auto", "自动"], ["force", "强制 SRC"]] },
       { path: "quality.target_rate", kind: "select", label: "目标采样率", options: [["44100", "44100 Hz"], ["48000", "48000 Hz"], ["88200", "88200 Hz"], ["96000", "96000 Hz"], ["176400", "176400 Hz"], ["192000", "192000 Hz"], ["352800", "352800 Hz"], ["384000", "384000 Hz"]] },
       { path: "quality.resample_quality", kind: "select", label: "重采样质量", options: [["fast", "省电"], ["balanced", "均衡"], ["quality", "高品质"]] },

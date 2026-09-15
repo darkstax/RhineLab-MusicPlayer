@@ -388,13 +388,16 @@ export class PlayerStore {
 
   async setVolume(value: number): Promise<void> {
     const volume = Math.min(1, Math.max(0, value));
+    // R3-P2-8（cb 复核）：原实现把 mode 恒写死 "hardware"——设置页「音质→音量模式」
+    // 的 fixed/integer/float 四个选项写进 config 后**永无消费点**（选 fixed="应用满音量"
+    // 承诺的旁路不成立）。改为读镜像配置；fixed 由核心锁 1.0（此处仍传值，核心裁决）。
+    const mode = readVolumeMode();
     await this.command(
-      // 协议 §5：mode=hardware 交宿主音量；M1 桩只存值（不改声）。
-      () => bridge.call("engine.volume", { mode: "hardware", value: volume }),
+      () => bridge.call("engine.volume", { mode, value: volume }),
       () => {
-        this.local.volume = volume;
-        this.local.volumeMode = "hardware";
-        return { volume, volumeMode: "hardware" };
+        this.local.volume = mode === "fixed" ? 1 : volume;
+        this.local.volumeMode = mode;
+        return { volume: this.local.volume, volumeMode: mode };
       },
     );
   }
@@ -428,4 +431,27 @@ export const playerStore = new PlayerStore();
 // 诊断/E2E 入口：只暴露快照读（不暴露动作），验收脚本据此断言 UI 背后的真实状态。
 if (typeof window !== "undefined") {
   window.__rhinePlayer = { snapshot: () => playerStore.state };
+}
+
+/**
+ * R3-P2-8：读设置页镜像的 `quality.volume_mode`（localStorage 键 rhine-music-config）。
+ * 无 localStorage（node/web 早期）或非法值时回退 "hardware"（M1 既定默认）。
+ */
+function readVolumeMode(): string {
+  const ALLOWED = new Set(["hardware", "fixed", "integer", "float"]);
+  try {
+    const raw =
+      typeof localStorage === "undefined"
+        ? null
+        : localStorage.getItem("rhine-music-config");
+    if (!raw) return "hardware";
+    const parsed: unknown = JSON.parse(raw);
+    const v =
+      typeof parsed === "object" && parsed !== null
+        ? (parsed as Record<string, unknown>)["quality.volume_mode"]
+        : undefined;
+    return typeof v === "string" && ALLOWED.has(v) ? v : "hardware";
+  } catch {
+    return "hardware";
+  }
 }
