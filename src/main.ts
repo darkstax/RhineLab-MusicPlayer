@@ -644,7 +644,13 @@ function renderDetail() {
   <div class="detail-footnote"><a href="${escapeHtml(r.source)}" target="_blank" rel="noopener">设定参考 ↗</a><span>${String(selected + 1).padStart(3, "0")} / ${String(records.length).padStart(3, "0")}</span></div>`;
   $("#detail-content").setAttribute("tabindex", "-1");
   $('[data-action="bookmark"]').setAttribute("aria-pressed", String(saved.has(r.id)));
-  documentDecryption.reset($("#detail-content"), prefs.reduced || !scene || scene.decryptionFrame.phase === "clear");
+  // R10（用户实测反馈）：**移除详情文字的黑块解密动画**。理由：
+  //   ① 该动画每帧重建/变换多个 DOM 覆盖层（按文本片段数），是详情页打开时的可观开销；
+  //   ② 用户明确要求删除，且信息传达价值低（文字本来就是即时可读的）。
+  // 传 clear=true 让 DocumentDecryption 直接走"无遮罩"路径（其内部 refresh 在
+  // progress===1 时立即 return，零 DOM 操作）。3D 封面上的显影（decryption.ts +
+  // setClarity）保留——那是封面图片本身的呈现效果，不属"黑框"。
+  documentDecryption.reset($("#detail-content"), true);
   if (hydrated) {
     if (activeTab !== "tracks" && activeTab !== "intro") activeTab = "tracks";
     void ensureAlbumTracks(r);
@@ -1314,7 +1320,7 @@ function frame(ms: number) {
   if (threeState === "closing" && scene?.presentationHidden) releaseThree();
   playground?.position();
   if (scene && mode === "detail") {
-    documentDecryption.update(time, scene.decryptionFrame, prefs.reduced);
+    // R10：黑块动画已移除（见 reset 处注释），不再每帧驱动。
     $("#detail-content").style.opacity = String(scene.detailVisibility);
     $("#detail-content").style.translate =
       `0 ${(1 - scene.detailVisibility) * 18}px`;
