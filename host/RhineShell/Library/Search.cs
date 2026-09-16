@@ -21,6 +21,8 @@ namespace RhineShell.Library;
 public static class Search
 {
     private const int MaxLimit = 200;
+    /// <summary>R9：limit&lt;=0（不限）时的安全上限——防未来超大曲库把管道/内存撑爆。</summary>
+    private const int HardLimit = 20000;
 
     /// <summary>检索曲目。scope=tracks（默认）。返回 {total, items:[TrackDto]}（协议 §5）。</summary>
     public static JsonObject QueryTracks(SqliteConnection db, JsonObject args)
@@ -29,7 +31,10 @@ public static class Search
         var filter = args["filter"] as JsonObject;
         var sort = args["sort"]?.GetValueKind() == JsonValueKind.String ? args["sort"]!.GetValue<string>() : null;
         var offset = ReadInt(args["offset"], 0);
-        var limit = Math.Clamp(ReadInt(args["limit"], MaxLimit), 1, MaxLimit);
+        // R9（启动卡顿）：limit<=0 = **不限**（与 QueryAlbums 同口径）。显式正数仍钳到
+        // [1, HardLimit]，防调用方误传超大值撑爆管道/内存。
+        var rawLimit = ReadInt(args["limit"], MaxLimit);
+        var limit = rawLimit <= 0 ? HardLimit : Math.Clamp(rawLimit, 1, HardLimit);
 
         var where = new StringBuilder("WHERE 1=1");
         var ps = new List<(string, object)>();
@@ -86,7 +91,10 @@ public static class Search
         var q = args["q"]?.GetValueKind() == JsonValueKind.String ? args["q"]!.GetValue<string>() : null;
         var genre = args["genre"]?.GetValueKind() == JsonValueKind.String ? args["genre"]!.GetValue<string>() : null;
         var filter = args["filter"] as JsonObject;
-        var limit = Math.Clamp(ReadInt(args["limit"], MaxLimit), 1, MaxLimit);
+        // R9（启动卡顿）：limit<=0 = **不限**（水合一次性拉全量专辑，避免 200 上限引发的
+        // 逐年切片 → 60+ 次串行 IPC）。显式正数仍钳到 [1, HardLimit]，防调用方误传超大值。
+        var rawLimit = ReadInt(args["limit"], MaxLimit);
+        var limit = rawLimit <= 0 ? HardLimit : Math.Clamp(rawLimit, 1, HardLimit);
 
         var where = new StringBuilder("WHERE 1=1");
         var ps = new List<(string, object)>();
@@ -143,9 +151,16 @@ public static class Search
                     r.GetInt64(5), r.GetInt64(6), r.GetInt64(7), r.IsDBNull(8) ? null : r.GetString(8)));
             }
         }
+        // R9：一次预聚合替代 N+1（原每张专辑各查一次 tracks）。344 张 → 1 次 GROUP BY。
+        var aggregates = LibraryDb.AggregateFormatsByAlbum(db);
         foreach (var (key, aTitle, aArtist, aYear, aGenre, discs, tracks, dur, cover) in albumRows)
         {
-            items.Add(LibraryDb.AlbumDto(db, key, aTitle, aArtist, aYear, aGenre, discs, tracks, dur, cover));
+            // 聚合键与 AlbumDto 的匹配式同源（COALESCE(NULLIF(album,''),'Unknown') 等）。
+            var ab = string.IsNullOrEmpty(aTitle) ? "Unknown" : aTitle;
+            var aa = string.IsNullOrEmpty(aArtist) ? "Unknown" : aArtist;
+            aggregates.TryGetValue((ab, aa), out var agg);
+            items.Add(LibraryDb.AlbumDtoFromAggregate(
+                key, aTitle, aArtist, aYear, aGenre, discs, tracks, dur, cover, agg));
         }
         return new JsonObject { ["total"] = total, ["items"] = items };
     }

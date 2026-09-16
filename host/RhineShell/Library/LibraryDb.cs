@@ -226,6 +226,95 @@ public static class LibraryDb
     /// <summary>AlbumDto 的 formats/bitrate_range/resolution 需要 tracks 聚合——统一在此补齐。
     /// 关联方式与 RebuildAlbums 同源（title/artist 即分组时的 album/album_artist 派生值；
     /// §4.4 schema 不在 tracks 存 album_key，故用同一派生表达式 JOIN，436 行量级零压力）。</summary>
+    /// <summary>
+    /// R9（启动卡顿）：**批量**聚合每张专辑的格式统计，替代逐专辑各跑一条 SQL 的 N+1。
+    ///
+    /// 背景：QueryAlbums 原先对每个 album 调 AlbumDto，而后者各执行一条
+    /// `SELECT codec,bitrate,sample_rate,bit_depth FROM tracks WHERE album/album_artist=...`。
+    /// 用户库 344 张专辑 → 344 次额外查询；配合分页上限 200 引发的"逐年切片"（60+ 次 IPC），
+    /// 启动水合累计数秒。本函数用**一条 GROUP BY** 算出全部专辑的聚合，复杂度从 O(N) 次查询
+    /// 降到 1 次。
+    ///
+    /// 分组键与 AlbumKey/AlbumDto 的匹配式同源：COALESCE(NULLIF(album,''),'Unknown') 与
+    /// COALESCE(NULLIF(album_artist,''),NULLIF(artist,''),'Unknown')。
+    /// </summary>
+    public static Dictionary<(string Album, string Artist), AlbumAggregate> AggregateFormatsByAlbum(
+        SqliteConnection db)
+    {
+        var map = new Dictionary<(string, string), AlbumAggregate>();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT COALESCE(NULLIF(album,''), 'Unknown')       AS ab,
+                   COALESCE(NULLIF(album_artist,''), NULLIF(artist,''), 'Unknown') AS aa,
+                   codec, bitrate, sample_rate, bit_depth
+            FROM tracks;
+            """;
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+        {
+            var ab = r.GetString(0);
+            var aa = r.GetString(1);
+            var key = (ab, aa);
+            if (!map.TryGetValue(key, out var agg))
+            {
+                agg = new AlbumAggregate();
+                map[key] = agg;
+            }
+            if (!r.IsDBNull(2))
+            {
+                var codec = r.GetString(2);
+                if (codec.Length > 0) agg.Codecs.Add(codec);
+                if (codec is "MP3" or "AAC" or "OGG" or "OPUS") agg.Lossy = true;
+            }
+            if (!r.IsDBNull(3)) { var b = r.GetInt64(3); agg.MinBitrate = Math.Min(agg.MinBitrate, b); agg.MaxBitrate = Math.Max(agg.MaxBitrate, b); }
+            if (!r.IsDBNull(4)) agg.MaxRate = Math.Max(agg.MaxRate, r.GetInt64(4));
+            if (!r.IsDBNull(5)) agg.MaxDepth = Math.Max(agg.MaxDepth, r.GetInt64(5));
+        }
+        return map;
+    }
+
+    /// <summary>单张专辑的格式聚合（AggregateFormatsByAlbum 的输出单元）。</summary>
+    public sealed class AlbumAggregate
+    {
+        public readonly SortedSet<string> Codecs = new(StringComparer.Ordinal);
+        public long MinBitrate = long.MaxValue;
+        public long MaxBitrate = long.MinValue;
+        public long MaxRate;
+        public long MaxDepth;
+        public bool Lossy;
+    }
+
+    /// <summary>
+    /// 由预聚合结果组装 AlbumDto（R9：与 <see cref="AlbumDto"/> 同形状，但不查库）。
+    /// </summary>
+    public static JsonObject AlbumDtoFromAggregate(string key, string? title, string? artist,
+        long? year, string? genre, long discCount, long trackCount, long durationMs, string? coverKey,
+        AlbumAggregate? agg)
+    {
+        var minBitrate = agg?.MinBitrate ?? long.MaxValue;
+        var maxBitrate = agg?.MaxBitrate ?? long.MinValue;
+        return new JsonObject
+        {
+            ["album_key"] = key,
+            ["title"] = title,
+            ["artist"] = artist,
+            ["year"] = year,
+            ["genre"] = genre,
+            ["disc_count"] = discCount,
+            ["track_count"] = trackCount,
+            ["duration_ms"] = durationMs,
+            ["cover_key"] = coverKey,
+            ["formats"] = new JsonArray([.. (agg?.Codecs ?? new SortedSet<string>(StringComparer.Ordinal)).Select(c => (JsonNode)JsonValue.Create(c)!)]),
+            ["bitrate_range"] = minBitrate <= maxBitrate ? new JsonArray(minBitrate, maxBitrate) : null,
+            ["resolution"] = new JsonObject
+            {
+                ["lossy"] = agg?.Lossy ?? false,
+                ["sample_rate"] = agg is { MaxRate: not 0 } ? agg.MaxRate : null,
+                ["bit_depth"] = agg is { MaxDepth: not 0 } ? agg.MaxDepth : null,
+            },
+        };
+    }
+
     public static JsonObject AlbumDto(SqliteConnection db, string key, string? title, string? artist,
         long? year, string? genre, long discCount, long trackCount, long durationMs, string? coverKey)
     {

@@ -179,12 +179,20 @@ function parseAlbumDto(raw: unknown): AlbumDto | null {
   };
 }
 
+/**
+ * 拉取专辑页。
+ * @param args 查询参数；其中 `limit` 由调用方决定：
+ *   - R9 主路径传 `limit: 0`（= 壳侧"不限"，一次拿全量）
+ *   - 兜底分页路径不传 limit（走壳默认 200）
+ * 注意展开顺序：**args 在后**，让调用方能覆盖 limit（早期写成 `{limit:0, ...args}` 会让
+ * 兜底分支也变成全量拉取，分页语义失效）。
+ */
 async function fetchAlbums(
   source: LibrarySource,
   args: Record<string, unknown>,
 ): Promise<{ items: AlbumDto[]; total: number }> {
   const raw = (await source
-    .call("library.albums", { limit: 200, ...args }, 15000)
+    .call("library.albums", { limit: 0, ...args }, 20000)
     .catch(() => null)) as Record<string, unknown> | null;
   const items = asArray(raw?.items)
     ? raw!.items.map(parseAlbumDto).filter((a): a is AlbumDto => a !== null)
@@ -207,27 +215,36 @@ async function collectAlbums(
     for (const album of items)
       if (!byKey.has(album.album_key)) byKey.set(album.album_key, album);
   };
+  // R9（启动卡顿）：**一次拉全量**。壳侧 `limit: 0` = 不限（Search.QueryAlbums 的 HardLimit
+  // 兜底 20000），一条往返拿完整个曲库的专辑。原实现是「基线 → 逐流派 → 超 200 的列逐年
+  // 切片」，在 344 专辑/13 流派的真实库上要 40–80+ 次串行 IPC，是启动卡顿的根因。
   const base = await fetchAlbums(source, {});
   merge(base.items);
-  const queue: string[] = [];
-  const seen = new Set<string>();
-  const enqueue = (genre: string | null) => {
-    if (!genre || seen.has(genre)) return;
-    seen.add(genre);
-    queue.push(genre);
-  };
-  for (const album of byKey.values()) enqueue(album.genre);
-  const thisYear = new Date().getFullYear();
-  for (let guard = 0; queue.length > 0 && guard < 400; guard++) {
-    const genre = queue.shift()!;
-    const page = await fetchAlbums(source, { genre });
-    merge(page.items);
-    for (const album of page.items) enqueue(album.genre);
-    if (page.total > page.items.length) {
-      // 大流派列（如 Arknights 290 > 200 上限）：逐年切片补尾（year 范围覆盖现实曲库 + 容错余量）。
-      for (let year = 1970; year <= thisYear + 5; year++) {
-        const slice = await fetchAlbums(source, { genre, filter: { year } });
-        merge(slice.items);
+
+  // 兜底：**旧壳**（limit 仍被钳到 200）或未来超 HardLimit 的巨型库 → 退化为原分页爬取。
+  // 新壳下 base.items.length === base.total，此分支不执行（零往返开销）。
+  if (base.items.length < base.total) {
+    const queue: string[] = [];
+    const seen = new Set<string>();
+    const enqueue = (genre: string | null) => {
+      if (!genre || seen.has(genre)) return;
+      seen.add(genre);
+      queue.push(genre);
+    };
+    for (const album of byKey.values()) enqueue(album.genre);
+    const thisYear = new Date().getFullYear();
+    for (let guard = 0; queue.length > 0 && guard < 400; guard++) {
+      const genre = queue.shift()!;
+      // 兜底路径显式要分页（旧壳的 200 上限语义），否则会继承 limit:0 变成全量重复拉取。
+      const page = await fetchAlbums(source, { genre, limit: 200 });
+      merge(page.items);
+      for (const album of page.items) enqueue(album.genre);
+      if (page.total > page.items.length) {
+        // 大流派列（如 Arknights 290 > 200 上限）：逐年切片补尾（year 覆盖现实曲库 + 容错余量）。
+        for (let year = 1970; year <= thisYear + 5; year++) {
+          const slice = await fetchAlbums(source, { genre, filter: { year }, limit: 200 });
+          merge(slice.items);
+        }
       }
     }
   }

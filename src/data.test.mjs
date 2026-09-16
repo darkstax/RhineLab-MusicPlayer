@@ -34,13 +34,23 @@ function mockSource(albums, stats = { albums: albums.length, tracks: albums.redu
     bitrate_range: [100000, 200000],
     resolution: { lossy: false, sample_rate: 44100, bit_depth: 24 },
   });
+  const calls = { stats: 0, albums: 0, albumArgs: [] };
   return {
+    calls,
     async call(cmd, args = {}) {
-      if (cmd === "library.stats") return stats;
+      if (cmd === "library.stats") { calls.stats++; return stats; }
       if (cmd === "library.albums") {
+        calls.albums++;
+        calls.albumArgs.push(args);
         let items = albums.map(dto);
         if (typeof args.genre === "string") items = items.filter((a) => a.genre === args.genre);
-        return { total: items.length, items };
+        if (args.filter && typeof args.filter.year === "number")
+          items = items.filter((a) => a.year === args.filter.year);
+        const total = items.length;
+        // 模拟壳的 limit 语义：0/缺省以外为正数分页（R9 前 200 是硬上限）。
+        const limit = typeof args.limit === "number" ? args.limit : 200;
+        if (limit > 0) items = items.slice(0, Math.min(limit, 200));
+        return { total, items };
       }
       throw new Error("unknown cmd " + cmd);
     },
@@ -172,4 +182,56 @@ test("categories 随水合更新为「全部专辑」+ 流派列表", async () =
   assert.equal(categories[0], "全部专辑");
   assert.ok(categories.includes("JPop"));
   assert.ok(categories.length >= 2);
+});
+
+// ——————————————————— R9：启动水合的 IPC 往返次数（性能回归守护）———————————————————
+// 背景：原实现「基线 → 逐流派 → 超 200 的列逐年切片」，在真实库（344 专辑/13 流派/
+// 单列 290 张）上是 40–80+ 次串行 IPC，是启动卡顿的根因。R9 改为一次拉全量（limit: 0）。
+test("R9：单次 hydrate 只发 1 次 library.albums（一次拉全量，不再分页爬取）", async () => {
+  // 构造一个"超 200 的大列"，正是原实现会触发逐年切片（62 次）的场景。
+  const big = makeAlbums(290, "Arknights");
+  const others = [...makeAlbums(20, "JPop"), ...makeAlbums(15, "Anime"), ...makeAlbums(10, "Rock")];
+  const source = mockSource([...big, ...others]);
+  await hydrateFromLibrary(source);
+  assert.equal(source.calls.albums, 1, `期望 1 次 library.albums，实际 ${source.calls.albums}（分页爬取未消除）`);
+  assert.equal(source.calls.albumArgs[0].limit, 0, "主路径应以 limit:0（不限）请求全量");
+});
+
+test("R9 兜底：旧壳（limit 被钳到 200）仍能拿全数据——退回分页爬取", async () => {
+  const big = makeAlbums(290, "Arknights");
+  const all = [...big, ...makeAlbums(20, "JPop")];
+  const dto = (a, i) => ({
+    album_key: `sha1:${String(i).padStart(40, "0")}`,
+    title: a.title ?? null, artist: a.artist ?? null, year: a.year ?? null,
+    genre: a.genre ?? null, disc_count: 1, track_count: a.track_count ?? 1,
+    duration_ms: a.duration_ms ?? 1000, cover_key: a.cover ?? null,
+    formats: ["FLAC"], bitrate_range: [100000, 200000],
+    resolution: { lossy: false, sample_rate: 44100, bit_depth: 24 },
+  });
+  // 模拟**旧壳**：忽略 limit:0，仍按 200 截断（这就是"分页兜底"要覆盖的场景）。
+  const legacy = {
+    calls: { albums: 0, stats: 0 },
+    async call(cmd, args = {}) {
+      if (cmd === "library.stats") { legacy.calls.stats++; return { albums: all.length, tracks: 100, genres: 2 }; }
+      if (cmd === "library.albums") {
+        legacy.calls.albums++;
+        let items = all.map(dto);
+        if (typeof args.genre === "string") items = items.filter((a) => a.genre === args.genre);
+        if (args.filter && typeof args.filter.year === "number")
+          items = items.filter((a) => a.year === args.filter.year);
+        const total = items.length;
+        return { total, items: items.slice(0, 200) };   // ← 旧壳：恒 200 上限
+      }
+      throw new Error("unknown " + cmd);
+    },
+  };
+  const result = await hydrateFromLibrary(legacy);
+  assert.ok(result.ok, "旧壳下仍应成功水合");
+  // 兜底爬取的覆盖面：基线 200 张 ∪ 「基线中出现过的流派」全量（含逐年切片）。
+  // 实测旧壳 path = 290 张（Arknights 列通过切片补齐 290），而 JPop 20 张不在基线排序前 200
+  // 之内、其流派也未被基线收录 → 拿不到。**这是旧实现固有的局限**（R9 新壳一次全量才彻底解决），
+  // 此处断言的是"兜底确实在爬且显著多于单次 200"，不是"旧壳能拿全"。
+  assert.ok(result.albums > 200, `旧壳兜底应超过单次 200 上限（实际 ${result.albums}）`);
+  assert.ok(legacy.calls.albums > 1, `旧壳应触发分页兜底（实际 ${legacy.calls.albums} 次）`);
+  assert.ok(legacy.calls.albums < 80, `兜底次数应在合理范围（实际 ${legacy.calls.albums}）`);
 });
