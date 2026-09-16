@@ -976,6 +976,10 @@ button {
      放大到 1480x940（不超过视口 92%），字号同步上调（见下方各规则）。 */
   width: min(1480px, 92vw);
   height: min(940px, 92vh);
+  /* R8-fix2：列向 flex，让检索结果列表弹性填充（不再写死高度）；底部状态栏改为
+     普通流内元素（原 absolute 会与列表重叠）。设置弹窗自身滚动，不受影响。 */
+  display: flex;
+  flex-direction: column;
   background: rgba(237, 235, 228, 0.97);
   box-shadow: 0 26px 95px #63513a20;
   border: 1px solid #f7f5ee;
@@ -1141,7 +1145,11 @@ button {
   letter-spacing: 1px;
 }
 .search-results {
-  height: 387px;
+  /* R8-fix2（用户实测）：原 height:387px 是按旧窗口 836px 写死的；窗口放大到 940px 后
+     列表底部越过 .modal-bottom（absolute bottom:30px）→ 末行被裁、状态栏压在内容上。
+     改为弹性填充：由 .terminal-modal 用 flex 分配剩余高度（见下），列表自身滚动。 */
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-gutter: stable;
@@ -1213,10 +1221,12 @@ button {
   color: #343a29;
 }
 .modal-bottom {
-  position: absolute;
-  bottom: 30px;
-  left: 53px;
-  right: 53px;
+  /* R8-fix2：原 absolute bottom:30px 会盖在列表上（列表变高后必然重叠）。
+     改为 flex 列内的末项：列表先弹性占满，状态栏自然贴底，互不遮挡。 */
+  flex: 0 0 auto;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid #d0c6b5;
   display: flex;
   justify-content: space-between;
   font-size: 11px;
