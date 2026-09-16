@@ -46,8 +46,10 @@
      改为 left:56% + width:min(820px, 42%)：列表显著加宽（1536 宽下约 645px），
      左侧仍留 56% 给封面卡（用户截图显示封面并未占满，有多余空白）。
      高度同步放宽：底部安全区 150→132（页脚/品牌行已在 R8 上移，实际占位变小）。 */
-  left: 56%;
-  width: min(820px, 42%);
+  /* R11b（用户再反馈"就是不够大"）：42% → 50%，左起点 56% → 50%。
+     1536 宽窗口下 645px → 768px。h2 的 max-width 同步放开（原 620px 会卡住标题）。 */
+  left: 50%;
+  width: 50%;
   max-height: min(calc(100% - 340px), calc(100vh - 289px - 132px));
   overflow-y: auto;
   overscroll-behavior: contain;

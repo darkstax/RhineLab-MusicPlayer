@@ -769,14 +769,15 @@ button {
   color: #77756b;
 }
 .detail-content h2 {
-  font-size: 40px;
+  /* R11b：原 max-width:620px 会卡住加宽后的标题（容器已到 768px）。改为随容器。 */
+  font-size: 42px;
   line-height: 1.12;
   letter-spacing: -1.3px;
   margin: 30px 0 13px;
-  max-width: 620px;
+  max-width: 100%;
 }
 .detail-title-cn {
-  font-size: 23px;
+  font-size: 25px;
   display: flex;
   align-items: center;
   gap: 23px;
@@ -1681,11 +1682,12 @@ button {
   }
 }
 /* Reading sizes for the extended research workspace. */
+/* R11：dt 11→13（字段名原先过小，远看几乎读不出）；dd 17→18。 */
 .metadata dt {
-  font-size: 11px;
+  font-size: 13px;
 }
 .metadata dd {
-  font-size: 17px;
+  font-size: 18px;
 }
 .tab-panel p {
   font-size: 18px;
@@ -2168,10 +2170,15 @@ button {
   background: rgba(228, 214, 197, 0.35);
 }
 .wall-metadata {
-  gap: 18px 34px;
+  /* R11（用户实测"右边列表不够大"）：加宽行距/列距，字号与通用详情对齐（见下）。 */
+  gap: 22px 38px;
+}
+.wall-metadata dt {
+  /* 专辑详情的字段名原先落到通用 .metadata dt（11px），在加宽后的列里显得过小。 */
+  font-size: 12px;
 }
 .wall-metadata dd {
-  font-size: 13px;
+  font-size: 16px;   /* 原 13px（比通用详情的 17px 还小，与 h2 反差过大） */
 }
 .track-list {
   margin: 12px 0 0;
