@@ -103,7 +103,10 @@ export class BootSequence {
       ink.textContent = el.textContent;
       el.replaceChildren(ink);
     });
-    this.poweredHTML = this.el(".powered").innerHTML;
+    // R8（用户实测白屏）：主界面右下角的 .powered 已按要求删除，此处原样读取会
+    // 抛 TypeError（null.innerHTML）→ boot 构造失败 → 整页白屏。
+    // 品牌字改为**可选**节点（保留开机动画对未删场景的兼容）。
+    this.poweredHTML = this.node(".powered")?.innerHTML ?? "";
     new BootLettering(this.brandLines[0], ["brand"]).setText("RHINE LAB");
     // Bind after collecting the original ring paths. Phrase artwork also has
     // SVG paths, and must never be included in the scan's animated geometry.
@@ -123,8 +126,13 @@ export class BootSequence {
   private el(selector: string) {
     return this.nodes.get(selector)!;
   }
+  /** R8：可选节点访问（缺失返回 undefined，不抛）——用于本轮删除的品牌字等。 */
+  private node(selector: string) {
+    return this.nodes.get(selector);
+  }
   private opacity(selector: string, value: number | boolean) {
-    this.el(selector).style.opacity = String(Number(value));
+    const node = this.node(selector);
+    if (node) node.style.opacity = String(Number(value));
   }
   update(time: number) {
     const s = bootMotion(time),
@@ -165,8 +173,10 @@ export class BootSequence {
       node.style.transform = `translateX(${s.brand[i].x}px)`;
     });
     this.opacity(".powered", s.poweredLetters > 0);
-    this.el(".powered").style.clipPath =
-      `inset(0 ${100 * (1 - s.poweredLetters / 19)}% 0 0)`;
+    const poweredEl = this.node(".powered");
+    if (poweredEl) {
+      poweredEl.style.clipPath = `inset(0 ${100 * (1 - s.poweredLetters / 19)}% 0 0)`;
+    }
     this.opacity(".scan", s.scanVisible);
     if (s.scanVisible) this.renderScan(s);
     this.opacity(".welcome", s.welcomeVisible ? s.welcomeOpacity : 0);
@@ -265,10 +275,11 @@ export class BootSequence {
   reset() {
     // Restore shared corner branding when skipping at any intermediate frame.
     [".brand", ".powered"].forEach((key) =>
-      this.el(key).removeAttribute("style"),
+      this.node(key)?.removeAttribute("style"),
     );
     this.brandLines.forEach((node) => node.removeAttribute("style"));
-    this.el(".powered").innerHTML = this.poweredHTML;
+    const poweredReset = this.node(".powered");
+    if (poweredReset) poweredReset.innerHTML = this.poweredHTML;
     this.opacity("#boot-background", 0);
   }
 }

@@ -11,7 +11,9 @@
   z-index: 90;
   /* UI 修复：原 max-width + shrink-to-fit 在中等宽度下把 identity 压到 142px（内容需 213px），
      徽章溢出盒子叠上播放钮；改为显式定宽，flex 分配才有确定的剩余空间可分。 */
-  width: min(980px, calc(100vw - 32px));
+  /* R8（用户实测）：新增 ⏮ ⏭ 与循环钮后 980px 已满载（进度条仅剩 ~10px，实测
+     "NO SIGNAL" 的 N 被 ⏮ 压住）。放宽到 1080px，并保留视口兜底。 */
+  width: min(1080px, calc(100vw - 32px));
   font-size: 12px;
   letter-spacing: 0.04em;
   color: var(--theme-ink, #080a08);
